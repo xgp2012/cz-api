@@ -6,6 +6,7 @@
 > - 代码规模：约 2673 个受版本管理文件（不含 `web/node_modules`）；后端 Go ≈ 25 万行，前端 TS/TSX ≈ 27 万行，`relaykit` + `tokenkit` 两个独立子模块 ≈ 3.7 万行。
 > - 本文档**以仓库实际代码为准**。官方在线文档 <https://docs.newapi.ai/zh> 可用作概念与运维参考，但其「本地开发」页仍在描述半年前的架构（`App.js`、`vite.config.js`、`semi design`、`bun.lockb`、`one-api.service`），**与实际代码不符，勿照做**。
 > - 仓库内的权威规范文件（改动前必读）：根目录 `AGENTS.md`、`web/AGENTS.md`、`.agents/rules/billing.md`、`docs/plugin-api/v1.md`。
+> - **必备工具**：`git`、**`gh`（GitHub CLI，强制使用）**、Go ≥ 1.26.10、Bun 1.4.4、Docker + BuildKit。`gh` 是本仓库远端状态的唯一事实来源，详见 [18.6](#186-必备工具与强制使用-gh)。
 
 ---
 
@@ -28,7 +29,7 @@
 15. [前端开发](#15-前端开发)
 16. [Electron 桌面端](#16-electron-桌面端)
 17. [构建、测试与部署](#17-构建测试与部署)
-18. [开发工作流与硬性规范](#18-开发工作流与硬性规范)
+18. [开发工作流与硬性规范](#18-开发工作流与硬性规范) — 含 [18.5 构建与流水线效率（强制）](#185-构建与流水线效率强制)、[18.6 必备工具与强制使用-gh](#186-必备工具与强制使用-gh)
 19. [常见任务操作手册](#19-常见任务操作手册)
 20. [坑点与雷区总表](#20-坑点与雷区总表)
 21. [附录](#21-附录)
@@ -1066,30 +1067,71 @@ make test          # 根模块（排除含 embed 的主包）+ relaykit + tokenk
 
 ### 17.4 Docker
 
-**`Dockerfile`（三阶段）**：
-1. `oven/bun:1.4.4` → `bun install --frozen-lockfile` → `DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat VERSION) bun run build`；
-2. `golang:1.26.10-alpine` → `CGO_ENABLED=0 GOWORK=off GOEXPERIMENT=greenteagc`；先 `ADD go.mod go.sum` 与 `relaykit/go.mod`、`tokenkit/go.mod`（**子模块 go.mod 必须存在才能解析依赖图**），`COPY --from=builder /build/web/dist ./web/dist`，再 `go build -pgo="$(go list -m -f '{{.Dir}}' github.com/Calcium-Ion/moejs)/default.pgo" -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'"`；
-3. `debian:bookworm-slim` + `ca-certificates tzdata libasan8 wget`，`EXPOSE 3000`，`WORKDIR /data`，`ENTRYPOINT ["/new-api"]`。
+**设计目标：把构建时长压到最低。** 结构上让每个阶段只被自己的输入失效，前后的工具链缓存都跨次复用。
 
-**`Dockerfile.dev`**：只建后端，`mkdir -p web/dist` + 占位 `index.html` 满足 embed，配合 `make dev-web` 做前端热更新。
+**`Dockerfile`（三阶段 + 缓存挂载，`# syntax=docker/dockerfile:1.7`）**：
+
+1. `web_deps`（`oven/bun:1.4.4`，digest 固定）：只 `COPY web/package.json web/bun.lock` 与 `web/.npmrc`，然后 `bun install --frozen-lockfile`，依赖树落在 `--mount=type=cache,id=bun-install,target=/root/.bun/install/cache`。**前端源码改动不会重装依赖。**
+2. `build_web`（`FROM web_deps`）：`COPY web/ ./` + `COPY ./VERSION`，`NODE_ENV=production` 下 `bun run build`。
+3. `build_backend`（`golang:1.26.10-alpine`，digest 固定）：`CGO_ENABLED=0 GOWORK=off GOEXPERIMENT=greenteagc`；先 `COPY go.mod go.sum` + `relaykit/go.mod` + `tokenkit/go.mod`（**子模块 go.mod 必须存在才能解析依赖图**），`go mod download` 与 `/root/.cache/go-build` 都用 cache mount；再 `COPY . .` 与 `COPY --from=build_web /build/web/dist ./web/dist`，最后
+   ```
+   go build -pgo="$(go list -m -f '{{.Dir}}' github.com/Calcium-Ion/moejs)/default.pgo" \
+            -trimpath -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=${VERSION}'" -o new-api
+   ```
+   **`build_web` 与 `build_backend` 互不依赖，BuildKit 会并行调度两阶段。**
+4. 运行阶段（`debian:bookworm-slim`，digest 固定）：`ca-certificates tzdata libasan8 wget`、`EXPOSE 3000`、`WORKDIR /data`、`ENTRYPOINT ["/new-api"]`。
+
+三个基础镜像都用 `ARG BUN_IMAGE` / `GO_IMAGE` / `RUNTIME_IMAGE` 参数化，改版本只动一行。
+
+**`.dockerignore` 是构建时长的一部分，不是可有可无的文件。** 现有排他项覆盖 `.github`、`.git`、`docs`、`electron`、`bin`、`e2e`、`integration`、`web/node_modules`、`web/dist`、`web/.tanstack` 等。两条硬规则：
+
+- **不要排除会被 `COPY` 读到的目录**（`relaykit/`、`tokenkit/`、`plugins/`、`web/`、`VERSION`、`LICENSE`/`NOTICE`/`THIRD-PARTY-LICENSES.md`）。
+- **不要写负向规则（`!xxx`）**：Docker 只在父目录未被排除时才应用否定，父目录一旦命中就整片丢弃。历史上排除 `.git` 曾连带把 `web/tsconfig.json`、`web/knip.config.ts` 挡在前端构建上下文之外。
+
+**`Dockerfile.dev`**：只建后端，`mkdir -p web/dist` + 占位 `index.html` 满足 embed，配合 `make dev-web` 做前端热更新；同样带 `go-mod` / `go-build` 缓存挂载。
 
 **`docker-compose.yml`**：`new-api`（`calciumion/new-api:latest`、卷 `./data:/data` 与 `./logs:/app/logs`、健康检查 `wget http://localhost:3000/api/status`）+ `redis`（`--requirepass 123456`）+ `postgres:15`；注释里备有 `mysql:8.2`、`clickhouse/clickhouse-server:24.8`。
 **`docker-compose.dev.yml`**：源码构建（`Dockerfile.dev`），`SQL_DSN=postgresql://root:123456@postgres:5432/new-api`、`SESSION_COOKIE_SECURE=false`。
 
+**本 fork 的自有镜像流程（`docker-publish.yml`，见 §17.5）**：main 每次推送构建并推送到 GHCR。本地等价命令：
+
+```bash
+# 本地构建（需 BuildKit，cache mount 才生效）
+DOCKER_BUILDKIT=1 docker build -t cz-api:local .
+
+# 只跑某一段
+DOCKER_BUILDKIT=1 docker build --target build_backend -t cz-api:backend .
+
+# 看每层耗时与缓存命中
+DOCKER_BUILDKIT=1 docker build --progress=plain -t cz-api:local .
+```
+
 ### 17.5 CI（`.github/workflows/`）
 
-| workflow | 作用 |
-|---|---|
-| `ci.yml` | backend：`go vet` / `go build` 三个模块 + `make test`（先 `touch web/dist/index.html`）；frontend：`bun check -b` + `bun run test` |
-| `docker-build.yml` | tag 触发，amd64/arm64 分机推送 `calciumion/new-api:<tag>-<arch>`，写入 `VERSION` |
-| `docker-image-branch.yml` | 手动构建分支镜像 |
-| `electron-build.yml` | Windows Electron 打包（忽略预发布 tag） |
-| `release.yml` | Linux/macOS/Windows 二进制 + `checksums-*.txt`；arm64 用 `CC=aarch64-linux-gnu-gcc CGO_ENABLED=1` |
-| `sync-release-to-gitcode.yml` | 同步 release 到 GitCode |
+| workflow | 触发 | 作用 |
+|---|---|---|
+| `ci.yml` | PR | backend：`go vet` / `go build` 三个模块 + `make test`（先 `touch web/dist/index.html`）；frontend：`bun check -b` + `bun run test` |
+| `docker-publish.yml` | push main / `v*` tag / 手动 / 触及 Dockerfile 的 PR | 唯一镜像工作流：amd64 + arm64 **原生分机并行**构建，推送到 `ghcr.io/xgp2012/cz-api`，再拼多架构 manifest |
+| `electron-build.yml` | tag（忽略预发布） | Windows Electron 打包 |
+| `release.yml` | tag（忽略 alpha） | Linux/macOS/Windows 二进制 + `checksums-*.txt`；arm64 用 `CC=aarch64-linux-gnu-gcc CGO_ENABLED=1` |
+| `sync-release-to-gitcode.yml` | 手动 | 同步 release 到 GitCode |
+
+**`docker-publish.yml` 的关键约束**（改这个文件前必读）：
+
+- `build-push-action` 在 `push: true` 时**必须**同时给 `tags`，否则 buildx 立刻报 `ERROR: failed to build: tag is needed when pushing to registry`——注意这个错误发生在构建开始前，与 Dockerfile 无关。
+- tag 形如 `sha-<7位>`（per-arch 阶段是 `sha-<7位>-<arch>`）；main 额外推 `latest`，`v*` tag 额外推该 tag。`latest` **只在 main 上更新**。
+- `provenance: false` + `sbom: false`：省掉额外的 attestation layer 与 registry 往返。
+- `cache-from/to: type=gha,scope=czapi-<ref>-<arch>`：缓存按架构隔离，互不覆盖。
+- 并发组 `docker-publish-<workflow>-<ref>` + `cancel-in-progress: true`：同一 ref 的旧构建会被取消，不浪费 runner。
+- 只用内置 `GITHUB_TOKEN`（`permissions.packages: write`），**不依赖任何 repository secret**。
+
+**已删除的上游工作流**：`docker-build.yml` 与 `docker-image-branch.yml` 推送 `calciumion/new-api` 到 Docker Hub，依赖本 fork 没有的 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 与 cosign keyless 身份，在本仓库必然失败，已移除。**不要恢复它们**；需要镜像就改 `docker-publish.yml`。
 
 ### 17.6 版本注入
 
 `VERSION` 文件（**本检出为空，0 字节**）→ 构建期 `-ldflags -X .../common.Version=$(cat VERSION)`；`common.Version` 默认 `"v0.0.0"`；运行时 `common.InitEnv()` 允许 `VERSION` 环境变量覆盖。发布流水线里由 CI 写入 `VERSION`。
+
+**`VERSION` 为空时的表现**：镜像版本串为空，`/api/status` 与前端关于页显示的版本即为空。`docker-publish.yml` 因此改用 `git rev-parse --short HEAD` 生成 `sha-<7位>` 作为标签，不依赖 `VERSION` 内容。`VERSION` 仍必须留在构建上下文里（Dockerfile 要 `cat` 它）。
 
 ---
 
@@ -1135,6 +1177,72 @@ make test          # 根模块（排除含 embed 的主包）+ relaykit + tokenk
 - **提交 PR 前**：先对比当前 git 用户与仓库历史核心开发者（`git log` 里反复出现的作者）。若当前 git 用户不是其中之一，**必须在 PR 正文中明确声明代码是 AI 生成或 AI 辅助的**。
 - **Issue / PR 模板**：项目所有者的 PR 用 `.github/PULL_REQUEST_TEMPLATE.md`（中文）或 `.github/PULL_REQUEST_TEMPLATE/en.md`（英文）；其他 agent 创建的 PR 用 `.agents/github/PR.md` 作为整个正文。Issue 先按 `.agents/github/ISSUE.md` 拒绝超范围请求（Coding Plan、逆向渠道、第三方包装、Codex 反代兼容、纯透传转发、第三方主机）。
 - 验证必须是**实际运行并观察到的命令与结果**，不能只写"`go build` / 测试通过了"。
+
+### 18.5 构建与流水线效率（强制）
+
+这些规则的目的是**避免把时间浪费在重复劳动上**。违反其中任何一条，都必须在变更说明里解释原因。
+
+**Docker 镜像构建**
+
+1. **阶段必须按输入失效。** 新增 `COPY` 时先问：这一行会让哪个阶段失效？依赖安装阶段（`web_deps`）只允许出现 `package.json` / `bun.lock` / `.npmrc`；把任何源码 `COPY` 进依赖层，都会让每次改动重装 1.5 GB 依赖。
+2. **保持 `build_web` 与 `build_backend` 互不依赖。** 除了后端 `COPY --from=build_web /build/web/dist` 之外，不要让两侧互相依赖——一旦串联，两个阶段就只能串行。
+3. **`RUN` 必须带 cache mount。** 依赖下载与编译类命令（`bun install`、`go mod download`、`go build`）一律用 `--mount=type=cache`，并用固定 `id` 复用。
+4. **不要用单次全量 `COPY . .` 喂依赖解析。** 依赖阶段用精确 `COPY`，源码阶段才 `COPY . .`。
+5. **`.dockerignore` 必须覆盖无关目录**：新增顶层目录（文档、脚本、生成物、本地构建产物）时，同步评估是否加入排除列表；**但不得排除任何 `COPY` 需要读取的路径**。
+6. **`.dockerignore` 不写负向规则。** 见 §20 第 16 条。
+7. **镜像体积也算构建时长**：不要往运行阶段装构建工具；需要新系统包时优先复用已有包。
+
+**GitHub Actions**
+
+8. **禁止 QEMU。** 多架构一律用原生 runner（`ubuntu-latest` + `ubuntu-24.04-arm` 并行），不要用 `--platform linux/amd64,linux/arm64` 在单机上模拟。
+9. **必须使用 `type=gha` 缓存**，并按架构分 scope，避免两个架构互相覆盖缓存条目。
+10. **同一 ref 必须有并发取消**（`concurrency.cancel-in-progress: true`）；否则连续推送会同时跑多个注定被替代的构建。
+11. **不要无理由打开 `provenance` / `sbom`**：它们产生额外 layer 与额外的 registry 往返。
+12. **不新增需要 secret 的工作流。** 本 fork 只依赖内置 `GITHUB_TOKEN`；引入新的 repository secret 前必须先确认它确实存在，否则该工作流每次都会失败。
+13. **`push: true` 必须给 `tags`**（§20 第 17 条）。
+14. **一个目的只留一个工作流。** 已删除的上游镜像工作流不要恢复（§20 第 18 条）；要改发布行为就改 `docker-publish.yml`。
+
+**本地迭代**
+
+15. **改 Go 用 `Dockerfile.dev`**，不要为了验证后端去跑完整三阶段构建。
+16. **判读测试结果不要看包退出码**，看 `--- FAIL` 行（§17.3）。Windows 上大量 `unlinkat` 清理失败是环境噪声，不是回归。
+17. **改动前先在基线 commit 上跑一遍可疑用例**（`git worktree add ../cz-api-base <sha>`），确认它本来就失败再动手——本仓库大量 `*DatabaseMatrix`、passkey、security 用例在 Windows 下常驻失败。
+18. **构建结论只看真实运行**：本地无 Docker 时用 `gh run watch` 等 CI 结果，不要以静态分析代替实际构建结论（§18.6）。
+
+### 18.6 必备工具与强制使用 `gh`
+
+**`gh`（GitHub CLI）是本仓库开发的必备工具，不是可选项。** 凡是涉及远端状态的事实，都必须用 `gh` 取得，不得凭推测下结论。
+
+**必须使用 `gh` 的场景**：
+
+| 场景 | 命令 | 为什么必须 |
+|---|---|---|
+| 判断 CI 是否通过 | `gh run list --limit 5` | 本地测试不代表流水线结果 |
+| 定位失败原因 | `gh run view <id> --log-failed` | 只有日志能给出真实报错，不要靠猜 |
+| 等构建结果 | `gh run watch <id> --interval 30 --exit-status` | 以完成态为依据，不做轮询猜测 |
+| 查看/触发 workflow | `gh workflow list` / `gh workflow run <file>` | 手动验证用 |
+| 查看 tag 与 release | `gh release list` / `gh release view` | 发布流程的事实来源 |
+| PR 与 Issue | `gh pr create` / `gh issue view` | 正文按 §18.4 的模板要求填写 |
+| 仓库设置与权限 | `gh api repos/<owner>/<repo>` | 诊断权限类失败（如 GHCR 写入） |
+
+**硬性要求**：
+
+1. **报告 CI 结果前必须先 `gh run list` 确认**，不允许出现"应该通过了"这类表述。失败时**必须贴出 `--log-failed` 中的真实报错行**。
+2. **诊断构建/部署问题先取日志再改代码。** 先 `gh run view <id> --log-failed`，确认失败在哪个步骤、哪个工具，再决定改什么。本仓库曾把 `tag is needed when pushing to registry`（缺 `tags`）误判成代码或权限问题——看日志一次就能定位。
+3. **多架构/多 job 的失败要分别看。** `gh run list` 只给 run 级 conclusion，`gh run view <id>` 才给出每个 job 的结论与耗时。
+4. **证明耗时改善要用 run 元数据**：`gh run view <id> --json jobs` 里有每个 job 的 `startedAt` / `completedAt`，用它对比优化前后，而不是凭感觉。
+5. **`gh` 已登录（`gh auth status` 确认）时不要让用户代查远端信息。** 只有确实缺少权限（例如 `read:packages`）时，才向用户说明并请求。
+
+**其它必备工具**：
+
+| 工具 | 用途 | 说明 |
+|---|---|---|
+| `git` | 版本控制 | 分支 `main`，远端 `origin` = `github.com/xgp2012/cz-api` |
+| `gh` | 远端事实来源 | 见上，**必备** |
+| Go ≥ 1.26.10 | 后端 | 三个模块均需 `GOWORK=off` 验证 |
+| Bun 1.4.4 | 前端 | `bun install` / `bun run build` / `bun check -b` |
+| Docker + BuildKit | 镜像 | 本地无 Docker 时改由 CI 验证，并用 `gh run watch` 取结果 |
+| `python`（可选） | 一次性辅助校验 | 可用来校验 workflow YAML 语法等；**不得因此把脚本文件留在仓库里** |
 
 ---
 
@@ -1191,7 +1299,19 @@ make test          # 根模块（排除含 embed 的主包）+ relaykit + tokenk
 1. 在 `router/api-router.go` 的对应子组注册；
 2. **如果该路由要支持 PAT，必须加进 `middleware/access_token_routes.go` 的 `accessTokenRouteRules`**，否则 fail-closed 直接 403 并打 `access token route is not declared`；
 3. 渠道类路由应走 `channel-router.go` 的 `handlePermissionRoute`（同时声明 PAT scope 与 Casbin 权限）；
-4. 若引入新权限，**同时注册到 authz Registry 与角色基线**。
+4. 若引入新权限，**同时注册到 authz Registry 与角色基线**；
+5. 涉及插件契约时同步 `docs/plugin-api/v1.md` / `v1.schema.json` / `v1.d.ts`（三者必须一致）；
+6. 用 `gh` 验证：改动推上去后 `gh run list` 确认 CI 结论，失败时 `gh run view <id> --log-failed` 取真实报错（§18.6）。
+
+### 19.7 修改 Docker/CI 流水线
+
+1. 先读 §17.4–17.6（Docker 结构、CI 表、版本注入）与 §18.5（效率强制规则）；
+2. 改 `Dockerfile` 后**必须**跑 `gh run list` + `gh run view <id> --log-failed` 确认：
+   - 失败发生在哪个 stage（`web_deps` / `build_web` / `build_backend` / 运行阶段）；
+   - 缓存是否命中（日志里找 `importing cache manifest`）；
+3. 声称"变快"必须有依据：用 `gh run view <id> --json jobs` 对比各 job 的 `startedAt` / `completedAt`；
+4. **不要恢复** `docker-build.yml` / `docker-image-branch.yml`（§20 第 18 条）；
+5. 镜像发布只走 `docker-publish.yml`，且只依赖内置 `GITHUB_TOKEN`。
 
 ---
 
@@ -1212,40 +1332,44 @@ make test          # 根模块（排除含 embed 的主包）+ relaykit + tokenk
 12. **ClickHouse 只能做日志库** —— 主库 DSN 为 `clickhouse://` 直接报错。
 13. **`VERSION` 为空** —— `docker build` 会注入空版本串；发布靠 CI 写入。
 14. **`make test` 排除了根模块自身包**。
+15. **`VERSION` 为空 → 镜像版本串为空**；打标签靠 CI 写 `VERSION`，或像本 fork 一样用 commit SHA。
+16. **`.dockerignore` 排除了父目录就别指望 `!` 能救回来** —— Docker 的否定规则只在父目录未被排除时生效。曾因排除 `.git` 连带丢弃 `web/tsconfig.json` 与 `web/knip.config.ts`。
+17. **`push: true` 的 build 步骤必须显式给 `tags`** —— 否则 buildx 在开始构建前就报 `tag is needed when pushing to registry`，与本仓库代码无关。
+18. **不要恢复 `docker-build.yml` / `docker-image-branch.yml`** —— 它们依赖本 fork 不持有的 Docker Hub 与 cosign 凭据，必然失败。
 
 ### 后端 / 转发
-15. **SSE 与 gzip 冲突** —— 引擎级 gzip 被注释禁用；`/api` 组仍 gzip，`/v1` 不压缩。给转发路由加 gzip 会截断流。
-16. **全局状态 + init 顺序** —— `common` 全是包级变量，`InitEnv` → `model.InitDB` → `model.InitOptionMap` 顺序不可换。
-17. **注册几乎都在 `init()`** —— oauth provider、authz 资源、system task handler 的跨包顺序不可控。
-18. **函数变量解耦循环依赖** —— `service.GetTaskAdaptorFunc` 必须在 `service.StartSystemTaskRunner()` **之前**赋值；同类还有 `i18n.SetUserLangLoader`、`common.TranslateMessage`。
-19. **PAT 路由 fail-closed** —— 新 `/api` 路由未声明即 403。
-20. **Casbin 无 RBAC 继承** —— 新权限必须同时进 Registry 与角色基线，否则 `isKnownPermission` 直接拒绝。
-21. **混淆常量勿改** —— `Auth-Version`、`specific_channel_version`、`Cache-Version` 是前端用于探测版本差异的固定值。
-22. **`TokenAuth` 按 `-` 截断 key** —— token 本体不能含 `-`，第二段被当渠道 ID。
-23. **`Distribute` 与 `controller.Relay` 双重重试** —— `Relay` 用 `service.RetryParam` 循环 `getChannel`，每次重试都要重建渠道上下文。
-24. **两套限流算法并存**（固定窗口 vs List 滑窗），调参要分别改。
-25. **`RELAY_RESPONSE_HEADER_TIMEOUT` 只约束"等响应头"** —— 非流式请求要等上游生成完才会返回响应头，值需留足余量。
+19. **SSE 与 gzip 冲突** —— 引擎级 gzip 被注释禁用；`/api` 组仍 gzip，`/v1` 不压缩。给转发路由加 gzip 会截断流。
+20. **全局状态 + init 顺序** —— `common` 全是包级变量，`InitEnv` → `model.InitDB` → `model.InitOptionMap` 顺序不可换。
+21. **注册几乎都在 `init()`** —— oauth provider、authz 资源、system task handler 的跨包顺序不可控。
+22. **函数变量解耦循环依赖** —— `service.GetTaskAdaptorFunc` 必须在 `service.StartSystemTaskRunner()` **之前**赋值；同类还有 `i18n.SetUserLangLoader`、`common.TranslateMessage`。
+23. **PAT 路由 fail-closed** —— 新 `/api` 路由未声明即 403。
+24. **Casbin 无 RBAC 继承** —— 新权限必须同时进 Registry 与角色基线，否则 `isKnownPermission` 直接拒绝。
+25. **混淆常量勿改** —— `Auth-Version`、`specific_channel_version`、`Cache-Version` 是前端用于探测版本差异的固定值。
+26. **`TokenAuth` 按 `-` 截断 key** —— token 本体不能含 `-`，第二段被当渠道 ID。
+27. **`Distribute` 与 `controller.Relay` 双重重试** —— `Relay` 用 `service.RetryParam` 循环 `getChannel`，每次重试都要重建渠道上下文。
+28. **两套限流算法并存**（固定窗口 vs List 滑窗），调参要分别改。
+29. **`RELAY_RESPONSE_HEADER_TIMEOUT` 只约束"等响应头"** —— 非流式请求要等上游生成完才会返回响应头，值需留足余量。
 
 ### 计费
-26. **禁止裸配额转换** —— 必须用 `common/quota_math.go` 的 helper 与 `*Checked` 变体。
-27. **`*uint` 字段可接受巨大正值** —— `>= 0` 不够，必须有上界。
-28. **透传绕过路径** —— `Extra["parameters"]`、任务 `metadata`、multipart 字段；`relay/common/override.go` 的 ParamOverride / HeaderOverride 同样是可以绕过 DTO 校验的乘数通道，对 `n` / `max_tokens` 仍需二次钳制。
-29. **不得用 `data.#` 数图片** —— 用 `openaiImageResponseCount` 的规则。
-30. **客户端中断不得降低图片计费**；JSON-as-SSE 转发时不能让客户端只收 `[DONE]` 却被扣图片钱。
-31. **表达式路径与传统倍率路径的浮点处理不同，不得混用**。
-32. **`fixed()` 只能作完整 `tier` 叶子**；任务与 Realtime 拒绝 `fixed()`。
-33. **任务差额结算**：`AdjustBillingOnComplete` 返回 0 = 保持预扣；落库前 `Reserve` 失败但已向客户端写过时仍继续结算，**可能透支**。
-34. **`InitChannelMeta` 不得清空 `StreamStatus` / `PriceData` / 计费累计量**。
+30. **禁止裸配额转换** —— 必须用 `common/quota_math.go` 的 helper 与 `*Checked` 变体。
+31. **`*uint` 字段可接受巨大正值** —— `>= 0` 不够，必须有上界。
+32. **透传绕过路径** —— `Extra["parameters"]`、任务 `metadata`、multipart 字段；`relay/common/override.go` 的 ParamOverride / HeaderOverride 同样是可以绕过 DTO 校验的乘数通道，对 `n` / `max_tokens` 仍需二次钳制。
+33. **不得用 `data.#` 数图片** —— 用 `openaiImageResponseCount` 的规则。
+34. **客户端中断不得降低图片计费**；JSON-as-SSE 转发时不能让客户端只收 `[DONE]` 却被扣图片钱。
+35. **表达式路径与传统倍率路径的浮点处理不同，不得混用**。
+36. **`fixed()` 只能作完整 `tier` 叶子**；任务与 Realtime 拒绝 `fixed()`。
+37. **任务差额结算**：`AdjustBillingOnComplete` 返回 0 = 保持预扣；落库前 `Reserve` 失败但已向客户端写过时仍继续结算，**可能透支**。
+38. **`InitChannelMeta` 不得清空 `StreamStatus` / `PriceData` / 计费累计量**。
 
 ### 前端
-35. **`web/dist` 必须存在才能编译 Go**；改了前端不重新 build 就跑的是旧产物。
-36. **i18n 新 key 不会自动提取** —— `i18n:sync` 只做对齐/回填；动态 key 还要登记 `static-keys.ts`。
-37. **`_extras` / `_reports` 是同步产物**，不参与运行时。
-38. **`zhCN` 不能直接传给 `Intl.*`** —— 会抛 `RangeError`；`project/intl-locale` 是 error 且不得 disable。
-39. **`src/routeTree.gen.ts` 是生成物** —— 手改会被覆盖；新增页面必须新建 `routes/` 文件。
-40. **错误提示只报一次** —— `handleServerError` 用 WeakSet 沿 `cause` 去重；Mutation 自定义 `onError` 后自动 Toast 失效。
-41. **`api.get` 默认 in-flight 去重** —— 需要重复调用要 `disableDuplicate`。
-42. **Electron 端口写死 3000** —— 与本地已运行的 Go 实例冲突会触发内置"端口被占用"诊断弹窗；同名 SQLite 被两个进程占用会 `database is locked`。
+39. **`web/dist` 必须存在才能编译 Go**；改了前端不重新 build 就跑的是旧产物。
+40. **i18n 新 key 不会自动提取** —— `i18n:sync` 只做对齐/回填；动态 key 还要登记 `static-keys.ts`。
+41. **`_extras` / `_reports` 是同步产物**，不参与运行时。
+42. **`zhCN` 不能直接传给 `Intl.*`** —— 会抛 `RangeError`；`project/intl-locale` 是 error 且不得 disable。
+43. **`src/routeTree.gen.ts` 是生成物** —— 手改会被覆盖；新增页面必须新建 `routes/` 文件。
+44. **错误提示只报一次** —— `handleServerError` 用 WeakSet 沿 `cause` 去重；Mutation 自定义 `onError` 后自动 Toast 失效。
+45. **`api.get` 默认 in-flight 去重** —— 需要重复调用要 `disableDuplicate`。
+46. **Electron 端口写死 3000** —— 与本地已运行的 Go 实例冲突会触发内置"端口被占用"诊断弹窗；同名 SQLite 被两个进程占用会 `database is locked`。
 
 ---
 
@@ -1307,5 +1431,6 @@ make test          # 根模块（排除含 embed 的主包）+ relaykit + tokenk
 |---|---|
 | 初次生成 | 基于 commit `e03439033` 的全量静态分析 |
 | 本轮 | 修正 §3 目录地图（`e2e/`→`integration/`、删除的 `bin/`、新增 `examples/`、各目录文件数）；修正 §8.2 渠道数量 59→53 与适配器目录数；新增 §8.2.1 渠道目录注册表；§14.1 补充新增文件；新增 §14.2.1 示例插件、§14.3 三种 `kind` 契约、§14.3.1 契约查询 API、§14.3.2 job 桥接；修正 §19.2「4 个必需函数」的错误表述并新增 §19.2.1 job 插件手册；§17.3 补充三个测试判断坑点与前端隔离坑；§21.5 更新已核实项 |
+| 2026-11-08 | 重写 §17.4 Docker（三阶段 + BuildKit cache mount + `.dockerignore` 约束）、§17.5 CI（`docker-publish.yml` 为唯一镜像工作流、上游 Docker Hub 工作流已删除及原因）、§17.6 版本注入（`VERSION` 为空时的表现）；新增 §18.5 构建与流水线效率强制规则、§18.6 必备工具与强制使用 `gh`；§20 新增 Docker 相关坑点 4 条并整体重新编号（46 条）；§19.6 补充 `gh` 验证要求 |
 
 *本文档由对 `cz-api` 仓库的全量静态分析生成。文档不修改仓库任何代码；文中数字随代码演进会再次过时，**修改相关代码时请同步更新对应小节**。*

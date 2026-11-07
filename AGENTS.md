@@ -15,6 +15,19 @@ This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI pro
 - **Auth**: Browser sessions, API tokens and personal access tokens, JWT, WebAuthn/Passkeys, TOTP, OAuth/OIDC; Casbin authorization in `service/authz/`
 - **Extensions**: JavaScript task plugins executed by moejs; Electron desktop wrapper
 - **Frontend package manager**: Bun (preferred over npm/yarn/pnpm)
+- **Container**: multi-stage `Dockerfile` built with BuildKit; the image publishes to GitHub Container Registry from `.github/workflows/docker-publish.yml`
+
+## Required Tooling
+
+`gh` (GitHub CLI) is a required development tool, not an optional convenience. Remote state — CI results, workflow runs and logs, releases, tags, repository and package permissions — MUST be established with `gh`, never inferred or assumed.
+
+- Before reporting a CI or build result, run `gh run list` and, for a failure, `gh run view <id> --log-failed` and quote the actual error line. Do not describe a build as passing without a run that shows it.
+- Diagnose a failing workflow or image build from its logs before changing code. The failing step and tool identify the fix; guessing has led to code changes made for an unrelated `tag is needed when pushing to registry` error.
+- Use `gh run watch <id> --exit-status` to wait for a completion state instead of polling or predicting.
+- Use `gh run view <id> --json jobs` (`startedAt` / `completedAt`) when claiming a build-time improvement.
+- When `gh auth status` shows a working login, do not ask the user to look up remote information. Only report a missing scope (for example `read:packages`) when a command actually fails for lack of it.
+
+The project's Docker build contract is documented in `DEVELOPMENT.zh_CN.md` §17.4–17.5 and §18.5; read those sections before editing `Dockerfile`, `Dockerfile.dev`, `.dockerignore`, or any workflow under `.github/workflows/`.
 
 ## Architecture
 
