@@ -1,0 +1,33 @@
+{
+  "apiVersion": 1,
+  "key": "example-batch",
+  "name": "Example Batch",
+  "icon": "text",
+  "description": {
+    "en": "Batch polling driver example",
+    "zh": "批量轮询驱动示例"
+  },
+  "version": "1.0.0",
+  "author": { "name": "Example Author" },
+  "models": ["fanout-image"],
+  "fetchMode": "batch",
+  "usageSchema": {
+    "image_count": {
+      "type": "number",
+      "unit": "count",
+      "unitLabel": { "en": "image", "zh": "张" },
+      "description": { "en": "Image generation unit price", "zh": "图片生成单价" }
+    },
+    "size": {
+      "enum": ["512", "1024"],
+      "enumLabels": {
+        "512": { "en": "512 pixels", "zh": "512 像素" },
+        "1024": { "en": "1024 pixels", "zh": "1024 像素" }
+      },
+      "description": { "en": "Output image size", "zh": "输出图片尺寸" }
+    }
+  },
+  "routes": [
+    { "method": "POST", "path": "/v1/fanout/images", "type": "submit", "decode": "decodeSubmit", "render": "renderSubmit" }
+  ]
+}

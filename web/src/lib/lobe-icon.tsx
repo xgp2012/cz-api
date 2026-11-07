@@ -64,10 +64,27 @@ const ICON_VARIANTS = {
   TextCn: 'hasTextCn',
   TextColor: 'hasTextColor',
 } as const
-const LAZY_ICONS = new Map<
-  string,
-  LazyExoticComponent<ComponentType<Record<string, unknown>>>
->()
+// Icon closures memoize the lazy() component per icon name so a rerender
+// reuses one component instance instead of allocating a new one.
+//
+// The memo hangs off globalThis rather than a module binding because a test
+// runner with a shared module graph reuses this module across jsdom
+// environments while still swapping `globalThis`. A module-level Map would
+// hand a React.lazy created under one environment to the next, where its
+// dynamic import never settles and the icon degrades to a placeholder.
+interface LobeIconMemo {
+  icons: Map<string, LazyExoticComponent<ComponentType<Record<string, unknown>>>>
+}
+
+const LOBE_ICON_MEMO_KEY = Symbol.for('new-api.lobe-icon.memo')
+
+function lobeIconMemo(): LobeIconMemo {
+  const host = globalThis as typeof globalThis & {
+    [LOBE_ICON_MEMO_KEY]?: LobeIconMemo
+  }
+  host[LOBE_ICON_MEMO_KEY] ??= { icons: new Map() }
+  return host[LOBE_ICON_MEMO_KEY]
+}
 
 function renderLobeIconFallback(
   name: string,
@@ -158,7 +175,8 @@ export function getLobeIcon(
   const propStartIndex =
     segments.length > 1 && /^[A-Z]/.test(segments[1]) ? 2 : 1
   const cacheKey = `${baseKey}.${variant}`
-  let IconComponent = LAZY_ICONS.get(cacheKey)
+  const { icons } = lobeIconMemo()
+  let IconComponent = icons.get(cacheKey)
   if (!IconComponent) {
     // Load the selected SVG variant, avoiding the brand index's Avatar/UI dependencies.
     // Rspack applies webpackInclude before normalizing Windows path separators.
@@ -176,7 +194,7 @@ export function getLobeIcon(
           ),
       }))
     )
-    LAZY_ICONS.set(cacheKey, IconComponent)
+    icons.set(cacheKey, IconComponent)
   }
 
   // Parse chained properties (e.g., "type={'platform'}", "shape='square'")

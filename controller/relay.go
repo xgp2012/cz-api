@@ -383,18 +383,6 @@ func RelayMidjourney(c *gin.Context) {
 	}
 }
 
-func RelayNotImplemented(c *gin.Context) {
-	err := types.OpenAIError{
-		Message: "API not implemented",
-		Type:    "new_api_error",
-		Param:   "",
-		Code:    "api_not_implemented",
-	}
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": err,
-	})
-}
-
 func RelayNotFound(c *gin.Context) {
 	// The web fallback may already have applied static-asset cache headers.
 	// A missing API or asset can appear after an upgrade; never cache its 404.

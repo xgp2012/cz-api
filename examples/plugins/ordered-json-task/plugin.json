@@ -1,0 +1,76 @@
+{
+  "apiVersion": 2,
+  "kind": "task",
+  "key": "example-ordered",
+  "name": "Example Ordered",
+  "icon": "text",
+  "description": {
+    "en": "apiVersion 2 task driver with ordered JSON",
+    "zh": "使用有序 JSON 的 apiVersion 2 任务驱动"
+  },
+  "version": "1.0.0",
+  "author": { "name": "Example Author" },
+  "requiredCapabilities": ["json-order@1"],
+  "models": ["ordered-json", "ordered-json-large"],
+  "fetchMode": "per_task",
+  "usageSchema": {
+    "request_count": {
+      "type": "number",
+      "unit": "count",
+      "description": { "en": "Request unit price", "zh": "请求单价" }
+    },
+    "item_count": {
+      "type": "number",
+      "unit": "count",
+      "unitLabel": { "en": "item", "zh": "项" },
+      "description": { "en": "Item processing unit price", "zh": "项目处理单价" }
+    },
+    "prompt_tokens": {
+      "type": "number",
+      "unit": "token",
+      "description": { "en": "Input token unit price", "zh": "输入词元单价" }
+    }
+  },
+  "usageExamples": [
+    { "label": "ordered model · one request", "facts": { "request_count": 1, "item_count": 0, "prompt_tokens": 200 } }
+  ],
+  "usageProfiles": [
+    {
+      "models": ["ordered-json"],
+      "schema": {
+        "request_count": {
+          "type": "number",
+          "unit": "count",
+          "description": { "en": "Request unit price", "zh": "请求单价" }
+        },
+        "prompt_tokens": {
+          "type": "number",
+          "unit": "token",
+          "description": { "en": "Input token unit price", "zh": "输入词元单价" }
+        }
+      },
+      "examples": [{ "label": "ordered-json · one request", "facts": { "request_count": 1, "prompt_tokens": 200 } }]
+    },
+    {
+      "models": ["ordered-json-large"],
+      "schema": {
+        "item_count": {
+          "type": "number",
+          "unit": "count",
+          "unitLabel": { "en": "item", "zh": "项" },
+          "description": { "en": "Item processing unit price", "zh": "项目处理单价" }
+        },
+        "prompt_tokens": {
+          "type": "number",
+          "unit": "token",
+          "description": { "en": "Input token unit price", "zh": "输入词元单价" }
+        }
+      },
+      "examples": [{ "label": "ordered-json-large · three items", "facts": { "item_count": 3, "prompt_tokens": 900 } }]
+    }
+  ],
+  "routes": [
+    { "method": "POST", "path": "/v1/ordered/tasks", "type": "submit", "decode": "decodeSubmit", "render": "renderSubmit" },
+    { "method": "GET", "path": "/v1/ordered/tasks/:task_id", "type": "query", "render": "renderTask" }
+  ]
+}

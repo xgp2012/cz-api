@@ -15,6 +15,39 @@ import (
 	"gorm.io/gorm/schema"
 )
 
+func TestIsValidSystemTaskType(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		taskType string
+		valid    bool
+		plugin   bool
+	}{
+		{name: "built-in log cleanup", taskType: SystemTaskTypeLogCleanup, valid: true},
+		{name: "built-in channel test", taskType: SystemTaskTypeChannelTest, valid: true},
+		{name: "built-in async poll", taskType: SystemTaskTypeAsyncTaskPoll, valid: true},
+		{name: "plugin type", taskType: "plugin:nightly", valid: true, plugin: true},
+		{name: "empty", taskType: "", valid: false},
+		{name: "unknown built-in", taskType: "channel_test_typo", valid: false},
+		{name: "plugin prefix without key", taskType: "plugin:", valid: false},
+		{name: "plugin key with upper case", taskType: "plugin:Nightly", valid: false},
+		{name: "plugin key with path", taskType: "plugin:a/b", valid: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.valid, IsValidSystemTaskType(tc.taskType))
+			assert.Equal(t, tc.plugin, IsPluginSystemTaskType(tc.taskType))
+		})
+	}
+}
+
+func TestPluginSystemTaskTypeIsNamespaced(t *testing.T) {
+	taskType := PluginSystemTaskType("nightly")
+	assert.Equal(t, "plugin:nightly", taskType)
+	assert.True(t, IsValidSystemTaskType(taskType))
+	// A plugin must never alias a built-in type, because the type is the lock
+	// key and the active_key dedup boundary.
+	assert.NotEqual(t, SystemTaskTypeChannelTest, PluginSystemTaskType("channel_test"))
+}
+
 func TestSystemTaskHistoryDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {

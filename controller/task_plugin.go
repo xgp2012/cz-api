@@ -836,6 +836,146 @@ func GetTaskPluginOptions(c *gin.Context) {
 	common.ApiSuccess(c, options)
 }
 
+// pluginMetadataSummary is the non-sensitive projection of a plugin manifest
+// served to clients. It deliberately omits every member that names a host,
+// credential, or pricing vector: allowedHosts, upstreams, auth, baseUrl, and
+// the usage schema. Those stay behind the administrator-only routes.
+type pluginMetadataSummary struct {
+	Key          string                 `json:"key"`
+	Name         string                 `json:"name"`
+	Kind         string                 `json:"kind"`
+	APIVersion   int                    `json:"apiVersion"`
+	Version      string                 `json:"version"`
+	Author       jsplugin.AuthorMeta    `json:"author"`
+	Description  jsplugin.LocalizedText `json:"description"`
+	Capabilities []string               `json:"capabilities"`
+	ChannelTypes []int                  `json:"channelTypes"`
+	Protocols    []pluginProtocolClaim  `json:"protocols"`
+	Models       []string               `json:"models"`
+}
+
+// pluginProtocolClaim is the client-facing form of a host protocol claim.
+type pluginProtocolClaim struct {
+	Name     string   `json:"name"`
+	Models   []string `json:"models,omitempty"`
+	Supports []string `json:"supports,omitempty"`
+}
+
+func summarizePluginMeta(meta jsplugin.Meta) pluginMetadataSummary {
+	claims := make([]pluginProtocolClaim, 0, len(meta.Protocols))
+	for _, claim := range meta.Protocols {
+		claims = append(claims, pluginProtocolClaim{Name: claim.Name, Models: claim.Models, Supports: claim.Supports})
+	}
+	return pluginMetadataSummary{
+		Key:          meta.Key,
+		Name:         meta.Name,
+		Kind:         meta.Kind,
+		APIVersion:   meta.APIVersion,
+		Version:      meta.Version,
+		Author:       meta.Author,
+		Description:  meta.Description,
+		Capabilities: meta.RequiredCapabilities,
+		ChannelTypes: meta.ChannelTypes,
+		Protocols:    claims,
+		Models:       meta.Models,
+	}
+}
+
+// ListPlugins answers every loaded plugin of every kind with the metadata a
+// client may read. The routing generation is the source, so the list matches
+// what the gateway can actually dispatch.
+func ListPlugins(c *gin.Context) {
+	items := make([]pluginMetadataSummary, 0)
+	generation := jsplugin.DefaultRegistry.Generation()
+	if generation != nil {
+		for _, plugin := range generation.Plugins() {
+			items = append(items, summarizePluginMeta(plugin.Meta))
+		}
+	}
+	common.ApiSuccess(c, items)
+}
+
+// GetPlugin answers one loaded plugin by key, 404 when the key is unknown.
+func GetPlugin(c *gin.Context) {
+	key := c.Param("key")
+	plugin, ok := jsplugin.DefaultRegistry.Get(key)
+	if !ok {
+		common.ApiErrorStatus(c, http.StatusNotFound, common.NewMessage("Plugin not found"))
+		return
+	}
+	common.ApiSuccess(c, summarizePluginMeta(plugin.Meta))
+}
+
+// GetPluginKinds publishes the kind contract: which manifest members each
+// kind requires or forbids, and which hooks it obliges. The hook requirements
+// come from jsplugin.PluginKinds, which derives them from the compiler.
+func GetPluginKinds(c *gin.Context) {
+	common.ApiSuccess(c, jsplugin.PluginKinds())
+}
+
+// pluginProtocolOperation is the client-facing form of one host protocol
+// operation: the client request it serves and the plugin exports it needs.
+type pluginProtocolOperation struct {
+	Name                    string               `json:"name"`
+	Methods                 []string             `json:"methods"`
+	Path                    string               `json:"path"`
+	BodyKinds               []string             `json:"bodyKinds"`
+	ModelField              string               `json:"modelField,omitempty"`
+	RequiredProtocolMembers []string             `json:"requiredProtocolMembers"`
+	Modes                   []pluginProtocolMode `json:"modes"`
+	RequiredDriverHooks     []string             `json:"requiredDriverHooks"`
+}
+
+type pluginProtocolMode struct {
+	Name string `json:"name"`
+	Hook string `json:"hook"`
+}
+
+type pluginProtocolCatalogEntry struct {
+	Name       string                    `json:"name"`
+	Operations []pluginProtocolOperation `json:"operations"`
+	Modes      []pluginProtocolMode      `json:"modes"`
+}
+
+// GetPluginProtocols publishes the host protocol catalog so a plugin author
+// can discover the request forms a claim must implement without reading the
+// host source.
+func GetPluginProtocols(c *gin.Context) {
+	definitions := jsplugin.HostProtocols()
+	entries := make([]pluginProtocolCatalogEntry, 0, len(definitions))
+	for _, definition := range definitions {
+		entry := pluginProtocolCatalogEntry{
+			Name:       definition.Name,
+			Operations: make([]pluginProtocolOperation, 0, len(definition.Operations)),
+		}
+		for _, operation := range definition.Operations {
+			bodyKinds := make([]string, len(operation.BodyKinds))
+			for i, bodyKind := range operation.BodyKinds {
+				bodyKinds[i] = string(bodyKind)
+			}
+			modes := make([]pluginProtocolMode, len(operation.Modes))
+			for i, mode := range operation.Modes {
+				modes[i] = pluginProtocolMode{Name: mode.Name, Hook: mode.Hook}
+			}
+			entry.Operations = append(entry.Operations, pluginProtocolOperation{
+				Name:                    operation.Name,
+				Methods:                 operation.Methods,
+				Path:                    operation.Path,
+				BodyKinds:               bodyKinds,
+				ModelField:              operation.ModelField,
+				RequiredProtocolMembers: operation.RequiredProtocolMembers,
+				Modes:                   modes,
+				RequiredDriverHooks:     operation.RequiredDriverHooks,
+			})
+		}
+		for _, mode := range definition.DefinedModes() {
+			entry.Modes = append(entry.Modes, pluginProtocolMode{Name: mode.Name, Hook: mode.Hook})
+		}
+		entries = append(entries, entry)
+	}
+	common.ApiSuccess(c, entries)
+}
+
 var taskPluginSyncState = struct {
 	sync.Mutex
 	hashes      map[string]string

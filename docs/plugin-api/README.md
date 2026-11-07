@@ -6,9 +6,13 @@ is currently unreleased; [`v1.schema.json`](./v1.schema.json) and
 
 ## Contract and lifecycle
 
-Every plugin exports `meta`, `buildSubmitRequest`, `parseSubmitResponse`, and
-`parseTaskResult`. A `per_task` plugin also exports `buildQueryRequest`; a
-`batch` plugin exports `buildBatchQueryRequest` and `parseBatchResult`.
+Every plugin exports `meta`. A task plugin (`meta.kind` omitted or `kind: "task"`)
+also exports `buildSubmitRequest`, `parseSubmitResponse`, and `parseTaskResult`.
+A `per_task` plugin also exports `buildQueryRequest`; a `batch` plugin exports
+`buildBatchQueryRequest` and `parseBatchResult`. A plugin of kind `job` or `identity`
+requires `apiVersion: 2`, must not declare `routes`, `protocols`, or
+`channelTypes`, and needs none of those task driver hooks; `models` and `fetchMode`
+are optional for it. See [Plugin kinds](./v1.md#plugin-kinds) in the API document.
 `meta.author.name` is required and `meta.author.url`, when present, must be an
 absolute HTTP(S) URL. This is self-declared attribution; a future marketplace's
 verified publisher identity is a separate host-owned record.
@@ -113,7 +117,8 @@ therefore never contact an upstream service.
 
 Upload from the root-only task plugin page or `POST /api/plugin/task` with
 `{"source":"...","remark":"..."}`. The server compiles the module, validates
-v1 metadata and required exports, and rejects invalid source before saving it.
+v1 metadata and required exports for the declared kind, and rejects invalid source
+before saving it.
 Use semantic plugin versions. Reusing a key/version with different source is
 rejected; activate or roll back a stored version through the management page.
 

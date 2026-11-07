@@ -190,7 +190,11 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"DELETE /api/system-info/stale-instances":      accessTokenScopeRule("ops:write"),
 	"DELETE /api/system-info/instances/:node_name": accessTokenScopeRule("ops:write"),
 
-	// router/api-router.go: /api/plugin/task
+	// router/api-router.go: /api/plugin, /api/plugin/task
+	"GET /api/plugin":                                accessTokenScopeRule("plugin:read"),
+	"GET /api/plugin/kinds":                          accessTokenScopeRule("plugin:read"),
+	"GET /api/plugin/protocols":                      accessTokenScopeRule("plugin:read"),
+	"GET /api/plugin/:key":                           accessTokenScopeRule("plugin:read"),
 	"GET /api/plugin/task":                           accessTokenScopeRule("plugin:read"),
 	"POST /api/plugin/task":                          accessTokenScopeRule("plugin:write"),
 	"PUT /api/plugin/task":                           accessTokenScopeRule("plugin:write"),
@@ -239,9 +243,7 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"GET /api/log/stat":                         accessTokenScopeRule("log:read"),
 	"GET /api/log/self/stat":                    accessTokenScopeRule("usage:read"),
 	"GET /api/log/channel_affinity_usage_cache": accessTokenScopeRule("log:read"),
-	"GET /api/log/search":                       accessTokenScopeRule("log:read"),
 	"GET /api/log/self":                         accessTokenScopeRule("usage:read"),
-	"GET /api/log/self/search":                  accessTokenScopeRule("usage:read"),
 	"GET /api/log/export":                       accessTokenScopeRule("log:read"),
 	"GET /api/log/self/export":                  accessTokenScopeRule("usage:read"),
 	"GET /api/data/":                            accessTokenScopeRule("log:read"),

@@ -164,19 +164,6 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/moderations", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAI)
 		})
-
-		// not implemented
-		httpRouter.POST("/images/variations", controller.RelayNotImplemented)
-		httpRouter.GET("/files", controller.RelayNotImplemented)
-		httpRouter.POST("/files", controller.RelayNotImplemented)
-		httpRouter.DELETE("/files/:id", controller.RelayNotImplemented)
-		httpRouter.GET("/files/:id/content", controller.RelayNotImplemented)
-		httpRouter.POST("/fine-tunes", controller.RelayNotImplemented)
-		httpRouter.GET("/fine-tunes", controller.RelayNotImplemented)
-		httpRouter.GET("/fine-tunes/:id", controller.RelayNotImplemented)
-		httpRouter.POST("/fine-tunes/:id/cancel", controller.RelayNotImplemented)
-		httpRouter.GET("/fine-tunes/:id/events", controller.RelayNotImplemented)
-		httpRouter.DELETE("/models/:model", controller.RelayNotImplemented)
 	}
 
 	relayMjRouter := router.Group("/mj")

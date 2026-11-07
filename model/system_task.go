@@ -2,8 +2,10 @@ package model
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
 
 	"gorm.io/gorm"
 )
@@ -21,7 +23,49 @@ const (
 	SystemTaskTypeModelUpdate    = "model_update"
 	SystemTaskTypeMidjourneyPoll = "midjourney_poll"
 	SystemTaskTypeAsyncTaskPoll  = "async_task_poll"
+
+	// pluginSystemTaskTypePrefix namespaces task types contributed by
+	// JavaScript plugins, so a plugin cannot impersonate a built-in type and
+	// collide with its lock and active_key.
+	pluginSystemTaskTypePrefix = "plugin:"
 )
+
+// IsValidSystemTaskType reports whether a type names an existing task type.
+//
+// Task types are not a closed set: a plugin of kind "job" adds its own type at
+// runtime. Validation therefore accepts a built-in type or a well-formed
+// plugin type rather than enumerating the built-ins, so adding a handler never
+// requires editing a central list.
+func IsValidSystemTaskType(taskType string) bool {
+	if taskType == "" {
+		return false
+	}
+	for _, builtIn := range []string{
+		SystemTaskTypeLogCleanup,
+		SystemTaskTypeChannelTest,
+		SystemTaskTypeModelUpdate,
+		SystemTaskTypeMidjourneyPoll,
+		SystemTaskTypeAsyncTaskPoll,
+	} {
+		if taskType == builtIn {
+			return true
+		}
+	}
+	return IsPluginSystemTaskType(taskType)
+}
+
+// IsPluginSystemTaskType reports whether taskType belongs to the plugin
+// namespace. The key after the prefix must be a valid plugin key, which the
+// plugin registry already constrains to lowercase alphanumerics and dashes.
+func IsPluginSystemTaskType(taskType string) bool {
+	key, ok := strings.CutPrefix(taskType, pluginSystemTaskTypePrefix)
+	return ok && jsplugin.ValidPluginKey(key)
+}
+
+// PluginSystemTaskType builds the task type a plugin owns.
+func PluginSystemTaskType(pluginKey string) string {
+	return pluginSystemTaskTypePrefix + pluginKey
+}
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
 

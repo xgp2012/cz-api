@@ -260,6 +260,17 @@ func SetApiRouter(router *gin.Engine) {
 			ratioSyncRoute.GET("/channels", controller.GetSyncableChannels)
 			ratioSyncRoute.POST("/fetch", controller.FetchUpstreamRatios)
 		}
+		// The read-only plugin contract: metadata of the loaded plugins, the
+		// kind contract, and the host protocol catalog. It shares the task
+		// plugin group's authorization and mutates nothing.
+		pluginRoute := apiRouter.Group("/plugin")
+		pluginRoute.Use(middleware.RootAuth())
+		{
+			pluginRoute.GET("", controller.ListPlugins)
+			pluginRoute.GET("/kinds", controller.GetPluginKinds)
+			pluginRoute.GET("/protocols", controller.GetPluginProtocols)
+			pluginRoute.GET("/:key", controller.GetPlugin)
+		}
 		taskPluginRoute := apiRouter.Group("/plugin/task")
 		taskPluginRoute.Use(middleware.RootAuth())
 		{
@@ -325,11 +336,9 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
-		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
 		logRoute.GET("/export", middleware.AdminAuth(), controller.ExportAllLogs)
 		logRoute.GET("/self/export", middleware.UserAuth(), controller.ExportUserLogs)
-		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
 
 		systemTaskRoute := apiRouter.Group("/system-task")
 		systemTaskRoute.Use(middleware.RootAuth())

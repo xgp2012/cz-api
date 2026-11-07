@@ -67,15 +67,6 @@ func (f *FileMeta) IsURL() bool {
 	return f.Source != nil && f.Source.IsURL()
 }
 
-// GetRawData 获取原始数据（兼容旧代码）
-// Deprecated: 请使用 Source.GetRawData()
-func (f *FileMeta) GetRawData() string {
-	if f.Source != nil {
-		return f.Source.GetRawData()
-	}
-	return ""
-}
-
 type RequestMeta struct {
 	OriginalModelName string `json:"original_model_name"`
 	UserUsingGroup    string `json:"user_using_group"`

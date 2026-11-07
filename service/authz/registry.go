@@ -1,6 +1,9 @@
 package authz
 
-import "slices"
+import (
+	"slices"
+	"sync"
+)
 
 // ActionDefinition describes a single action exposed by a resource. DefaultRoles
 // lists the role keys that receive this action as part of their baseline grants.
@@ -18,15 +21,35 @@ type ResourceDefinition struct {
 	Actions  []ActionDefinition `json:"actions"`
 }
 
-var registry []ResourceDefinition
+var (
+	registryMu sync.RWMutex
+	registry   []ResourceDefinition
+)
 
 // RegisterResource adds a resource definition to the permission registry.
+//
+// Resources are declared from package init functions, including by plugins, so
+// registration is guarded and de-duplicated: a second definition for the same
+// resource is ignored rather than appended, because a duplicate would surface
+// twice in the permission catalog and in every role's baseline grants.
 func RegisterResource(resource ResourceDefinition) {
+	if resource.Resource == "" {
+		return
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if slices.ContainsFunc(registry, func(known ResourceDefinition) bool {
+		return known.Resource == resource.Resource
+	}) {
+		return
+	}
 	registry = append(registry, resource)
 }
 
 // Catalog returns a copy of the registered resource definitions.
 func Catalog() []ResourceDefinition {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	result := make([]ResourceDefinition, 0, len(registry))
 	for _, resource := range registry {
 		result = append(result, ResourceDefinition{
@@ -40,6 +63,8 @@ func Catalog() []ResourceDefinition {
 
 // AllPermissions returns every registered permission.
 func AllPermissions() []Permission {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	permissions := make([]Permission, 0)
 	for _, resource := range registry {
 		for _, action := range resource.Actions {
@@ -54,6 +79,8 @@ func AllPermissions() []Permission {
 
 // PermissionsForRole returns the permissions whose DefaultRoles include roleKey.
 func PermissionsForRole(roleKey string) []Permission {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	permissions := make([]Permission, 0)
 	for _, resource := range registry {
 		for _, action := range resource.Actions {
@@ -73,15 +100,16 @@ func actionHasRole(action ActionDefinition, roleKey string) bool {
 }
 
 func isKnownResource(resource string) bool {
-	for _, known := range registry {
-		if known.Resource == resource {
-			return true
-		}
-	}
-	return false
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return slices.ContainsFunc(registry, func(known ResourceDefinition) bool {
+		return known.Resource == resource
+	})
 }
 
 func catalogActions(resource string) []ActionDefinition {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	for _, known := range registry {
 		if known.Resource == resource {
 			return known.Actions
@@ -91,6 +119,8 @@ func catalogActions(resource string) []ActionDefinition {
 }
 
 func isKnownPermission(permission Permission) bool {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	for _, resource := range registry {
 		if resource.Resource != permission.Resource {
 			continue

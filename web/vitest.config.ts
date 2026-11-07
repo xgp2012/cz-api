@@ -43,6 +43,19 @@ export default defineConfig({
     testTimeout: 20000,
     clearMocks: true,
     restoreMocks: true,
+    // Worker model. A full run took ~50 min on a 4-core / 8 GB box.
+    //
+    // isolate: false cut that to ~11 min (~77% faster) by building one module
+    // graph per worker instead of one per file, but it is rejected here: a
+    // shared graph also shares module-level mock state, and suites that set
+    // vi.mocked(...).mockResolvedValue at module scope then observe a previous
+    // file's mock (channel-type-badge fails only when another file ran first).
+    // That failure mode is invisible in isolation and order-dependent, which is
+    // worse for development speed than a slow but trustworthy run.
+    //
+    // The supported way to buy the same win without sharing state is to run the
+    // suite in shards and fan them out, which keeps a fresh graph per file.
+    isolate: true,
     include: [
       'src/**/*.{test,spec}.{ts,tsx}',
       'scripts/oxlint/__tests__/*.test.ts',

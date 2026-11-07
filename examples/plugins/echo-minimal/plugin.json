@@ -1,0 +1,39 @@
+{
+  "apiVersion": 1,
+  "key": "example-echo",
+  "name": "Example Echo",
+  "icon": "text",
+  "description": {
+    "en": "Minimal per-task polling driver example",
+    "zh": "最小化的单任务轮询驱动示例"
+  },
+  "version": "1.0.0",
+  "author": { "name": "Example Author" },
+  "baseUrl": "https://echo.example.com",
+  "models": ["echo-1", "echo-1-mini"],
+  "fetchMode": "per_task",
+  "usageSchema": {
+    "word_count": {
+      "type": "number",
+      "unit": "count",
+      "unitLabel": { "en": "thousand words", "zh": "千字" },
+      "description": { "en": "Text generation unit price", "zh": "文本生成单价" }
+    },
+    "prompt_tokens": {
+      "type": "number",
+      "unit": "token",
+      "description": { "en": "Input token unit price", "zh": "输入词元单价" }
+    },
+    "fast": {
+      "type": "boolean",
+      "description": { "en": "Whether fast mode is requested", "zh": "是否请求快速模式" }
+    }
+  },
+  "usageExamples": [
+    { "label": "echo-1 · 1k words", "facts": { "word_count": 1, "prompt_tokens": 120, "fast": false } }
+  ],
+  "routes": [
+    { "method": "POST", "path": "/v1/echo/jobs", "type": "submit", "decode": "decodeSubmit", "render": "renderSubmit" },
+    { "method": "GET", "path": "/v1/echo/jobs/:task_id", "type": "query", "render": "renderTask" }
+  ]
+}

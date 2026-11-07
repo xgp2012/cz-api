@@ -7,14 +7,12 @@ const (
 	ChannelTypeAzure          = 3
 	ChannelTypeOllama         = 4
 	ChannelTypeMidjourneyPlus = 5
-	ChannelTypeOpenAIMax      = 6
-	ChannelTypeOhMyGPT        = 7
+	// Values 6, 7, 9, 12, 13 and 22 belonged to channel types with no adaptor
+	// (OpenAIMax, OhMyGPT, AILS, API2GPT, AIGC2D, FastGPT). Their slots stay
+	// empty so a stored channels.type never aliases a different provider.
 	ChannelTypeCustom         = 8
-	ChannelTypeAILS           = 9
 	ChannelTypeAIProxy        = 10
 	ChannelTypePaLM           = 11
-	ChannelTypeAPI2GPT        = 12
-	ChannelTypeAIGC2D         = 13
 	ChannelTypeAnthropic      = 14
 	ChannelTypeBaidu          = 15
 	ChannelTypeZhipu          = 16
@@ -23,7 +21,6 @@ const (
 	ChannelType360            = 19
 	ChannelTypeOpenRouter     = 20
 	ChannelTypeAIProxyLibrary = 21
-	ChannelTypeFastGPT        = 22
 	ChannelTypeTencent        = 23
 	ChannelTypeGemini         = 24
 	ChannelTypeMoonshot       = 25
@@ -148,14 +145,9 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeAzure:          "Azure",
 	ChannelTypeOllama:         "Ollama",
 	ChannelTypeMidjourneyPlus: "MidjourneyPlus",
-	ChannelTypeOpenAIMax:      "OpenAIMax",
-	ChannelTypeOhMyGPT:        "OhMyGPT",
 	ChannelTypeCustom:         "Custom",
-	ChannelTypeAILS:           "AILS",
 	ChannelTypeAIProxy:        "AIProxy",
 	ChannelTypePaLM:           "PaLM",
-	ChannelTypeAPI2GPT:        "API2GPT",
-	ChannelTypeAIGC2D:         "AIGC2D",
 	ChannelTypeAnthropic:      "Anthropic",
 	ChannelTypeBaidu:          "Baidu",
 	ChannelTypeZhipu:          "Zhipu",
@@ -164,7 +156,6 @@ var ChannelTypeNames = map[int]string{
 	ChannelType360:            "360",
 	ChannelTypeOpenRouter:     "OpenRouter",
 	ChannelTypeAIProxyLibrary: "AIProxyLibrary",
-	ChannelTypeFastGPT:        "FastGPT",
 	ChannelTypeTencent:        "Tencent",
 	ChannelTypeGemini:         "Gemini",
 	ChannelTypeMoonshot:       "Moonshot",

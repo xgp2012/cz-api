@@ -473,8 +473,3 @@ func ResetProxyClientCache() {
 	proxyClients.store(clientCacheKey("", defaultHTTPTransportPolicy()), defaultClient)
 }
 
-// NewProxyHttpClient is kept for compatibility.
-// Deprecated: use GetHttpClientWithProxy.
-func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
-	return GetHttpClientWithProxy(proxyURL)
-}

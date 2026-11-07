@@ -169,16 +169,6 @@ func exportLogs(c *gin.Context, all bool) {
 	common.ApiSuccess(c, gin.H{"count": count})
 }
 
-// Deprecated: SearchAllLogs 已废弃，前端未使用该接口。
-func SearchAllLogs(c *gin.Context) {
-	common.ApiErrorT(c, "This API is deprecated")
-}
-
-// Deprecated: SearchUserLogs 已废弃，前端未使用该接口。
-func SearchUserLogs(c *gin.Context) {
-	common.ApiErrorT(c, "This API is deprecated")
-}
-
 func GetLogByKey(c *gin.Context) {
 	tokenId := c.GetInt("token_id")
 	if tokenId == 0 {

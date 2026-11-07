@@ -8,7 +8,11 @@ const (
 	APITypeZhipu
 	APITypeAli
 	APITypeXunfei
-	APITypeAIProxyLibrary
+	// Value 7 belonged to the removed AIProxyLibrary API type. Leave the slot
+	// out rather than renumbering: the value is never persisted, but keeping
+	// the gap makes the constant values documented in older deployment notes
+	// unambiguous.
+	_
 	APITypeTencent
 	APITypeGemini
 	APITypeZhipuV4

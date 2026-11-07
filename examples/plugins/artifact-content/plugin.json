@@ -1,0 +1,31 @@
+{
+  "apiVersion": 1,
+  "key": "example-artifacts",
+  "name": "Example Artifacts",
+  "icon": "text",
+  "description": {
+    "en": "Artifact download driver example",
+    "zh": "产物下载驱动示例"
+  },
+  "version": "1.0.0",
+  "author": { "name": "Example Author" },
+  "baseUrl": "https://api.example-video.com",
+  "allowedHosts": ["cdn.example-video.com"],
+  "models": ["clip-video"],
+  "fetchMode": "per_task",
+  "usageSchema": {
+    "seconds": {
+      "type": "number",
+      "unit": "second",
+      "description": { "en": "Video generation unit price", "zh": "视频生成单价" }
+    },
+    "with_audio": {
+      "type": "boolean",
+      "description": { "en": "Whether audio is generated", "zh": "是否生成音频" }
+    }
+  },
+  "routes": [
+    { "method": "POST", "path": "/v1/clips", "type": "submit", "decode": "decodeSubmit", "render": "renderSubmit" }
+  ],
+  "protocols": ["openai_video"]
+}

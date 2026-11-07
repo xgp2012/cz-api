@@ -45,14 +45,12 @@ export const CHANNEL_TYPES = {
   3: 'Azure',
   4: 'Ollama',
   5: 'MjProxyPlus',
-  // 6: 'OpenAIMax',
+  // 6, 9, 12, 13: retired with no backend adaptor. Listing them would offer a
+  // provider the gateway cannot serve.
   7: 'OhMyGPT',
   8: 'Custom',
-  // 9: 'AILS',
   // 10: 'AI Proxy',
   // 11: 'PaLM',
-  // 12: 'API2GPT',
-  // 13: 'AIGC2D',
   14: 'Anthropic',
   15: 'Baidu',
   16: 'Zhipu',
@@ -61,7 +59,6 @@ export const CHANNEL_TYPES = {
   19: '360',
   20: 'OpenRouter',
   // 21: 'AI Proxy Library',
-  22: 'FastGPT',
   23: 'Tencent',
   24: 'Gemini',
   25: 'Moonshot',
@@ -117,8 +114,7 @@ export const CHANNEL_PROVIDER_PRESENTATION: Partial<
   4: { descriptionKey: 'Connect to local or self-hosted Ollama models' },
   5: { descriptionKey: 'Generate Midjourney images through MjProxyPlus' },
   7: { descriptionKey: 'Access model services through the OhMyGPT gateway' },
-  8: {
-    descriptionKey:
+  8: {    descriptionKey:
       'Legacy full-URL integration; use Advanced Custom for new channels',
     badge: { labelKey: 'Deprecated', tone: 'warning' },
   },
@@ -131,7 +127,6 @@ export const CHANNEL_PROVIDER_PRESENTATION: Partial<
   20: {
     descriptionKey: 'Access models from multiple providers through OpenRouter',
   },
-  22: { descriptionKey: 'Connect to FastGPT applications' },
   23: { descriptionKey: 'Connect to Tencent Hunyuan model services' },
   24: { descriptionKey: 'Connect to models through the Google Gemini API' },
   25: { descriptionKey: 'Connect to Moonshot AI model services' },
@@ -562,7 +557,6 @@ export const CLAUDE_FIELD_PASSTHROUGH_TYPES = new Set([
 export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   15: 'Format: APIKey|SecretKey',
   18: 'Format: APPID|APISecret|APIKey',
-  22: 'Format: APIKey-AppId, e.g., fastgpt-0sp2gtvfdgyi4k30jwlgwf1i-64f335d84283f05518e9e041',
   23: 'Format: TokenHub API Key, or legacy AppId|SecretId|SecretKey',
   33: 'Format: Ak|Sk|Region',
   50: 'Format: AccessKey|SecretKey (or just ApiKey if upstream is New API)',

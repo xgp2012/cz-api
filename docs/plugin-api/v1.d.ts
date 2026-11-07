@@ -58,7 +58,9 @@ export type UsageFieldSchema =
   | {enum: readonly string[]; unitLabel?: never; description?: LocalizedText; enumLabels?: Readonly<Record<string, LocalizedText>>};
 export type UsageExample = {label: string; facts: Readonly<Record<string, string | number | boolean>>};
 export type UsageProfile = {models: readonly string[]; schema: Readonly<Record<string, UsageFieldSchema>>; examples?: readonly UsageExample[]};
-export interface Meta {requiredCapabilities?: readonly HostCapability[]; submitResponseTypes?: readonly ("json" | "sse")[]; sortPriority?: number; website?: string; apiVersion: 1; key: string; name: string; icon?: string; description?: LocalizedText; version: string; author: {name: string; url?: string}; baseUrl?: string; channelTypes?: readonly number[]; models: readonly string[]; fetchMode: "per_task" | "batch"; allowedHosts?: readonly string[]; upstreams?: readonly UpstreamKind[]; routes?: readonly NativeRoute[]; protocols?: readonly ProtocolClaim[]; usageSchema?: Readonly<Record<string, UsageFieldSchema>>; usageExamples?: readonly UsageExample[]; usageProfiles?: readonly UsageProfile[]; auth?: "none" | "api_key" | "vertex_oauth" | {type: "none" | "api_key" | "oauth2_jwt"}}
+/** What the host may use the plugin for. Omitted means `task`, so every apiVersion 1 manifest loads unchanged as a task driver. `job` and `identity` require apiVersion 2, must not declare routes, protocols, or channelTypes, and need no task driver hooks. */
+export type PluginKind = "task" | "job" | "identity";
+export interface Meta {requiredCapabilities?: readonly HostCapability[]; submitResponseTypes?: readonly ("json" | "sse")[]; sortPriority?: number; website?: string; apiVersion: 1 | 2; /* `task` when omitted; a non-task kind requires apiVersion 2. */ kind?: PluginKind; key: string; name: string; icon?: string; description?: LocalizedText; version: string; author: {name: string; url?: string}; baseUrl?: string; /* job and identity plugins must not declare it. */ channelTypes?: readonly number[]; /** Required when kind is `task` (the default); omit it for job and identity plugins. */ models?: readonly string[]; /** Required when kind is `task` (the default); omit it for job and identity plugins. */ fetchMode?: "per_task" | "batch"; allowedHosts?: readonly string[]; upstreams?: readonly UpstreamKind[]; /* job and identity plugins must not declare it. */ routes?: readonly NativeRoute[]; /* job and identity plugins must not declare it. */ protocols?: readonly ProtocolClaim[]; usageSchema?: Readonly<Record<string, UsageFieldSchema>>; usageExamples?: readonly UsageExample[]; usageProfiles?: readonly UsageProfile[]; auth?: "none" | "api_key" | "vertex_oauth" | {type: "none" | "api_key" | "oauth2_jwt"}}
 export interface TaskView {task_id: string; status: string; progress?: string; fail_reason?: string; created_at?: number; updated_at?: number; data?: unknown; properties?: Record<string, unknown>}
 export interface DriverContext {requestBody: unknown; /** Client request headers, first value under the canonical name, without gateway credentials; Content-Type and Accept are always present. Older gateways pass only those two. */ requestHeaders: Readonly<Record<string, string>>; action: string; model: string; upstreamModel: string; baseUrl: string; apiKey?: string; authHeader: string; upstream: UpstreamContext; files: readonly FileReference[]; publicTaskId: string; originTasks?: readonly {taskId: string; upstreamTaskId: string; action: string; status: string; data: unknown}[]}
 export interface TaskQueryContext {taskId: string; publicTaskId: string; action: string; model: string; upstreamModel: string; baseUrl: string; apiKey?: string; authHeader: string; auth?: unknown; upstream: UpstreamContext; data: unknown; state: unknown}
@@ -80,6 +82,7 @@ export declare const protocols: {
   /** render returns the OpenAI ImageResponse; the host adds `created` when absent and resolves response_format b64_json. */
   openai_image?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; render(ctx: unknown, task: TaskView): {created?: number; data: readonly ImageResponseEntry[]} & Record<string, unknown>};
 };
+/** The driver hooks in this block form the task driver set. buildSubmitRequest, parseSubmitResponse, parseTaskResult and one query hook are required only when kind is `task` (the default); a `job` or `identity` plugin needs none of them. */
 export declare function buildSubmitRequest(ctx: DriverContext): RequestDescriptor;
 export interface SubmitEvent {event: string; id: string; data: string}
 export type JSONPath = readonly (string | number)[];
@@ -91,13 +94,16 @@ export interface SubmitEventDeltaResult {changes: readonly JSONChange[]; state: 
 export declare function parseSubmitEventDelta(ctx: DriverContext, event: SubmitEvent, previousState: JSONValue | null): SubmitEventDeltaResult;
 export declare function parseSubmitEvent(ctx: DriverContext, event: SubmitEvent, previousState: JSONValue | null): {state: JSONValue; done: boolean};
 export declare function parseSubmitResponse(ctx: DriverContext, response: UpstreamResponse): {taskId: string; taskData?: unknown; immediate?: NormalizedTaskResult; state?: unknown};
-/** Query redirects retain credentials only within the channel host and meta.allowedHosts; SSRF checks and HTTPS downgrade protection still apply. */
+/** Query redirects retain credentials only within the channel host and meta.allowedHosts; SSRF checks and HTTPS downgrade protection still apply. Required when kind is `task` and fetchMode is not `batch`. */
 export declare function buildQueryRequest(ctx: TaskQueryContext): RequestDescriptor;
+/** Required instead of buildQueryRequest when kind is `task` and fetchMode is `batch`. */
 export declare function buildBatchQueryRequest(ctx: BatchQueryContext, tasks: readonly TaskQueryContext[]): RequestDescriptor;
 export declare function parseTaskResult(ctx: TaskQueryContext, body: unknown, response: HookHTTPResponse): NormalizedTaskResult;
+/** Required instead of parseTaskResult when kind is `task` and fetchMode is `batch`. */
 export declare function parseBatchResult(ctx: BatchQueryContext, body: unknown, response: HookHTTPResponse): readonly (NormalizedTaskResult & {taskId: string; data?: unknown; state?: unknown})[];
 export declare function extractUsage(ctx: DriverContext & {usagePurpose?: "facts" | "billing_ratios"}): Readonly<Record<string, string | number | boolean>> | null;
 export declare function extractUsageOnSubmit(ctx: DriverContext, taskData: unknown): Readonly<Record<string, string | number | boolean>> | null;
 export declare function extractUsageOnComplete(task: TaskQueryContext, result: NormalizedTaskResult, data: unknown): Readonly<Record<string, string | number | boolean>> | null;
+/** Optional. listArtifacts and buildContentRequest must be exported together, and only task plugins serve artifacts. */
 export declare function listArtifacts(task: {taskId: string; status: string; action: string; data: unknown; producerVersion: string}): readonly TaskArtifact[];
 export declare function buildContentRequest(ctx: DriverContext & {artifactKey: string; data: unknown; state?: unknown; upstreamTaskId: string; clientRequest: {method: "GET" | "HEAD"; headers: Readonly<Record<string, string>>}}): RequestDescriptor;

@@ -1,0 +1,13 @@
+{
+  "apiVersion": 2,
+  "kind": "job",
+  "key": "example-nightly",
+  "name": "Example Nightly",
+  "icon": "text",
+  "description": {
+    "en": "Scheduled system task example",
+    "zh": "定时系统任务示例"
+  },
+  "version": "1.0.0",
+  "author": { "name": "Example Author" }
+}

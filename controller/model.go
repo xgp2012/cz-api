@@ -35,10 +35,12 @@ var channelId2Models map[int][]string
 func init() {
 	// https://platform.openai.com/docs/models/model-endpoint-compatibility
 	for i := range constant.APITypeDummy {
-		if i == constant.APITypeAIProxyLibrary {
+		// Constant slots retired from the enum leave gaps that GetAdaptor does
+		// not map, so the iteration must tolerate a nil adaptor.
+		adaptor := relay.GetAdaptor(i)
+		if adaptor == nil {
 			continue
 		}
-		adaptor := relay.GetAdaptor(i)
 		channelName := adaptor.GetChannelName()
 		modelNames := adaptor.GetModelList()
 		for _, modelName := range modelNames {
@@ -97,7 +99,7 @@ func init() {
 	channelId2Models = make(map[int][]string)
 	for i := 1; i <= constant.ChannelTypeDummy; i++ {
 		apiType, success := common.ChannelType2APIType(i)
-		if !success || apiType == constant.APITypeAIProxyLibrary {
+		if !success {
 			if plugin, ok := jsplugin.DefaultRegistry.GetByChannelType(i); ok {
 				channelId2Models[i] = append([]string(nil), plugin.Meta.Models...)
 			}

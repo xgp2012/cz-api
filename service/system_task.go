@@ -54,13 +54,25 @@ var (
 // RegisterSystemTaskHandler registers a handler keyed by its Type(). It must be
 // called before StartSystemTaskRunner (or any time, since the runner snapshots
 // the registry every pass). Re-registering a type replaces the previous handler.
-func RegisterSystemTaskHandler(h SystemTaskHandler) {
+//
+// A type in the plugin namespace may only be registered by the plugin that owns
+// that key; built-in handlers must not squat on a plugin type and a plugin must
+// not claim a built-in one.
+func RegisterSystemTaskHandler(h SystemTaskHandler) error {
 	if h == nil {
-		return
+		return errors.New("system task handler must not be nil")
+	}
+	taskType := h.Type()
+	if !model.IsValidSystemTaskType(taskType) {
+		return fmt.Errorf("unknown system task type %q", taskType)
 	}
 	systemTaskHandlersMu.Lock()
 	defer systemTaskHandlersMu.Unlock()
-	systemTaskHandlers[h.Type()] = h
+	if _, exists := systemTaskHandlers[taskType]; exists && model.IsPluginSystemTaskType(taskType) {
+		return fmt.Errorf("system task type %q is already registered", taskType)
+	}
+	systemTaskHandlers[taskType] = h
+	return nil
 }
 
 func registeredSystemTaskHandlers() []SystemTaskHandler {
@@ -84,7 +96,12 @@ func (logCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runner
 }
 
 func init() {
-	RegisterSystemTaskHandler(logCleanupHandler{})
+	// The handler is a compile-time constant, so a registration error here
+	// means the built-in type and the validator disagree; surface it loudly
+	// instead of starting a runner that silently never schedules the cleanup.
+	if err := RegisterSystemTaskHandler(logCleanupHandler{}); err != nil {
+		panic(fmt.Sprintf("register log cleanup system task: %v", err))
+	}
 }
 
 type LogCleanupPayload struct {

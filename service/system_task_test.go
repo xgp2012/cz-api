@@ -62,6 +62,37 @@ func countSystemTasks(t *testing.T, taskType string) int64 {
 	return count
 }
 
+func TestRegisterSystemTaskHandlerValidatesTypeAndOwnership(t *testing.T) {
+	withSystemTaskRegistry(t)
+
+	t.Run("rejects unknown type", func(t *testing.T) {
+		err := RegisterSystemTaskHandler(&stubScheduledHandler{taskType: "not_a_task_type"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown system task type")
+	})
+
+	t.Run("rejects nil handler", func(t *testing.T) {
+		require.Error(t, RegisterSystemTaskHandler(nil))
+	})
+
+	t.Run("accepts plugin namespace and rejects a second claim", func(t *testing.T) {
+		pluginType := model.PluginSystemTaskType("nightly")
+		require.NoError(t, RegisterSystemTaskHandler(&stubScheduledHandler{taskType: pluginType}))
+		_, registered := systemTaskHandlers[pluginType]
+		assert.True(t, registered)
+		// A second handler for the same plugin type would silently replace the
+		// first owner's lock namespace, so it must fail instead.
+		err := RegisterSystemTaskHandler(&stubScheduledHandler{taskType: pluginType})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already registered")
+	})
+
+	t.Run("built-in type may be replaced", func(t *testing.T) {
+		require.NoError(t, RegisterSystemTaskHandler(&stubScheduledHandler{taskType: model.SystemTaskTypeLogCleanup}))
+		require.NoError(t, RegisterSystemTaskHandler(&stubScheduledHandler{taskType: model.SystemTaskTypeLogCleanup}))
+	})
+}
+
 func TestSystemTaskSchedulerCreatesWhenDueAndDedups(t *testing.T) {
 	truncate(t)
 

@@ -28,6 +28,11 @@ import (
 
 const APIVersion1 = 1
 
+// APIVersion2 introduces meta.kind. Everything else in the v1 contract keeps
+// its meaning: a v2 manifest that omits kind is still a task driver, and the
+// host rejects a non-task kind on a v1 manifest.
+const APIVersion2 = 2
+
 const (
 	maxLocalizedTextLocales       = 16
 	maxMetaDescriptionRunes       = 512
@@ -89,6 +94,7 @@ type Meta struct {
 	SortPriority         int                         `json:"sortPriority,omitempty"`
 	Website              string                      `json:"website,omitempty"`
 	APIVersion           int                         `json:"apiVersion"`
+	Kind                 string                      `json:"kind,omitempty"`
 	Key                  string                      `json:"key"`
 	Name                 string                      `json:"name"`
 	Icon                 string                      `json:"icon,omitempty"`
@@ -107,6 +113,42 @@ type Meta struct {
 	UsageExamples        []UsageExample              `json:"usageExamples,omitempty"`
 	UsageProfiles        []UsageProfile              `json:"usageProfiles,omitempty"`
 	Auth                 AuthMeta                    `json:"auth"`
+}
+
+// Plugin kinds. A plugin declares what the host may use it for; the kind
+// decides which driver hooks are required and which host surfaces it may
+// attach to. API version 1 plugins always load as PluginKindTask, so an
+// existing manifest keeps its meaning without being rewritten.
+const (
+	// PluginKindTask is the asynchronous task driver documented in
+	// docs/plugin-api/v1.md: submit, poll, poll-batch, artifacts, content.
+	PluginKindTask = "task"
+	// PluginKindJob contributes a scheduled system task. It has no relay
+	// surface; see service.SystemTaskRegistry for the host side.
+	PluginKindJob = "job"
+	// PluginKindIdentity contributes an OAuth/OIDC identity source. It reports
+	// who the upstream authenticated; the host still issues and validates
+	// sessions.
+	PluginKindIdentity = "identity"
+)
+
+// defaultPluginKind is the kind an apiVersion 1 manifest always loads as.
+const defaultPluginKind = PluginKindTask
+
+// isKnownPluginKind reports whether a kind is one the host can dispatch.
+func isKnownPluginKind(kind string) bool {
+	switch kind {
+	case PluginKindTask, PluginKindJob, PluginKindIdentity:
+		return true
+	default:
+		return false
+	}
+}
+
+// RequiresTaskDriverHooks reports whether the plugin kind must export the task
+// driver hook set (buildSubmitRequest, parseSubmitResponse, and a query hook).
+func (m Meta) RequiresTaskDriverHooks() bool {
+	return m.Kind == PluginKindTask
 }
 
 // Upstream kinds a plugin driver can address. Every driver speaks to its
@@ -348,19 +390,10 @@ func CompilePlugin(source string, options Options) (*LoadedPlugin, error) {
 	}
 	engine.key = meta.Key
 	engine.version = meta.Version
-	requiredHooks := []string{"buildSubmitRequest", "parseSubmitResponse", "parseTaskResult"}
-	if slices.Contains(meta.SubmitResponseTypes, "sse") {
-		if UsesSubmitEventDelta(meta, engine) {
-			requiredHooks = append(requiredHooks, "parseSubmitEventDelta")
-		} else {
-			requiredHooks = append(requiredHooks, "parseSubmitEvent")
-		}
+	if !meta.RequiresTaskDriverHooks() {
+		return compileNonTaskPlugin(meta, engine)
 	}
-	if meta.FetchMode == "batch" {
-		requiredHooks = append(requiredHooks, "buildBatchQueryRequest", "parseBatchResult")
-	} else {
-		requiredHooks = append(requiredHooks, "buildQueryRequest")
-	}
+	requiredHooks := taskDriverRequiredHooks(meta, engine)
 	for _, hook := range requiredHooks {
 		has, hasErr := engine.HasCallablePath(context.Background(), hook)
 		if hasErr != nil {
@@ -518,6 +551,118 @@ func CompilePlugin(source string, options Options) (*LoadedPlugin, error) {
 				}
 			}
 		}
+	}
+	for _, removed := range []string{"resolveRequest", "renderError", "renderers"} {
+		if engine.HasExport(removed) {
+			return nil, fmt.Errorf("plugin %s export %q is no longer supported", meta.Key, removed)
+		}
+	}
+	return &LoadedPlugin{Meta: meta, Engine: engine}, nil
+}
+
+// Manifest fields a derived hook requirement reads.
+const (
+	PluginRequirementFieldSubmitResponseTypes = "submitResponseTypes"
+	PluginRequirementFieldFetchMode           = "fetchMode"
+)
+
+// PluginHookRequirement is one export a plugin manifest obliges the plugin to
+// provide. Field names the manifest member whose value selected the
+// requirement, and Value holds that selection, so a reader that shows the
+// contract can ask for its own answer instead of reading a hand-copied list.
+// An empty Field means every manifest carries the requirement.
+type PluginHookRequirement struct {
+	Hook  string `json:"hook"`
+	Field string `json:"field,omitempty"`
+	Value string `json:"value,omitempty"`
+}
+
+// MergePluginHookRequirements appends extra requirements for every already
+// listed hook and returns the result sorted by hook. A plugin that repeats a
+// hook keeps one entry; extra entries name the manifest field that added it.
+func MergePluginHookRequirements(requirements []PluginHookRequirement, extra ...PluginHookRequirement) []PluginHookRequirement {
+	merged := slices.Clone(requirements)
+	for _, candidate := range extra {
+		replaced := false
+		for i := range merged {
+			if merged[i].Hook != candidate.Hook {
+				continue
+			}
+			if candidate.Field == "" || merged[i].Field == candidate.Field {
+				merged[i] = candidate
+				replaced = true
+			}
+		}
+		if !replaced {
+			merged = append(merged, candidate)
+		}
+	}
+	slices.SortStableFunc(merged, func(left, right PluginHookRequirement) int {
+		return strings.Compare(left.Hook, right.Hook)
+	})
+	return merged
+}
+
+// RequiredHooksOfAssets lists the artifact hooks a plugin must export once it
+// serves task artifacts. The compiler requires them together or not at all.
+var RequiredHooksOfAssets = []PluginHookRequirement{
+	{Hook: "buildContentRequest"},
+	{Hook: "listArtifacts"},
+}
+
+// TaskDriverHookRequirements derives, from a plugin's own manifest, the
+// exports its task driver must provide. The compiler enforces exactly these;
+// the kind contract published to clients reads the same function, so the two
+// cannot drift apart.
+func TaskDriverHookRequirements(meta Meta, usesEventDelta bool) []PluginHookRequirement {
+	requirements := []PluginHookRequirement{
+		{Hook: "buildSubmitRequest"},
+		{Hook: "parseSubmitResponse"},
+		{Hook: "parseTaskResult"},
+	}
+	if slices.Contains(meta.SubmitResponseTypes, "sse") {
+		hook := "parseSubmitEvent"
+		if usesEventDelta {
+			hook = "parseSubmitEventDelta"
+		}
+		requirements = append(requirements, PluginHookRequirement{
+			Hook:  hook,
+			Field: PluginRequirementFieldSubmitResponseTypes,
+			Value: "sse",
+		})
+	}
+	if meta.FetchMode == "batch" {
+		requirements = append(requirements,
+			PluginHookRequirement{Hook: "buildBatchQueryRequest", Field: PluginRequirementFieldFetchMode, Value: "batch"},
+			PluginHookRequirement{Hook: "parseBatchResult", Field: PluginRequirementFieldFetchMode, Value: "batch"},
+		)
+	} else {
+		requirements = append(requirements, PluginHookRequirement{Hook: "buildQueryRequest"})
+	}
+	return requirements
+}
+
+// taskDriverRequiredHooks is the compiler's view of TaskDriverHookRequirements:
+// the manifest names the requirements and the engine picks between the two SSE
+// parsers.
+func taskDriverRequiredHooks(meta Meta, engine *Engine) []string {
+	requirements := TaskDriverHookRequirements(meta, UsesSubmitEventDelta(meta, engine))
+	hooks := make([]string, len(requirements))
+	for i, requirement := range requirements {
+		hooks[i] = requirement.Hook
+	}
+	return hooks
+}
+
+func compileNonTaskPlugin(meta Meta, engine *Engine) (*LoadedPlugin, error) {
+	if len(meta.Routes) > 0 {
+		return nil, fmt.Errorf("plugin %s kind %q must not declare routes", meta.Key, meta.Kind)
+	}
+	if len(meta.Protocols) > 0 {
+		return nil, fmt.Errorf("plugin %s kind %q must not claim host protocols", meta.Key, meta.Kind)
+	}
+	if len(meta.ChannelTypes) > 0 {
+		return nil, fmt.Errorf("plugin %s kind %q must not bind channel types", meta.Key, meta.Kind)
 	}
 	for _, removed := range []string{"resolveRequest", "renderError", "renderers"} {
 		if engine.HasExport(removed) {
@@ -1028,7 +1173,7 @@ func decodeMeta(value any) (Meta, error) {
 	}
 	for field := range object {
 		switch field {
-		case "requiredCapabilities", "submitResponseTypes", "sortPriority", "website", "apiVersion", "key", "name", "icon", "description", "version", "author", "baseUrl", "channelTypes", "channelType", "compatibleChannelTypes", "models", "fetchMode", "allowedHosts", "upstreams", "routes", "protocols", "usageSchema", "usageExamples", "usageProfiles", "auth", "endpoints", "submitPaths", "actions":
+		case "requiredCapabilities", "submitResponseTypes", "sortPriority", "website", "apiVersion", "kind", "key", "name", "icon", "description", "version", "author", "baseUrl", "channelTypes", "channelType", "compatibleChannelTypes", "models", "fetchMode", "allowedHosts", "upstreams", "routes", "protocols", "usageSchema", "usageExamples", "usageProfiles", "auth", "endpoints", "submitPaths", "actions":
 		default:
 			return Meta{}, &UnknownMetaFieldError{Field: field}
 		}
@@ -1037,6 +1182,9 @@ func decodeMeta(value any) (Meta, error) {
 	var err error
 	meta.APIVersion, err = integerMetaField(object, "apiVersion")
 	if err != nil {
+		return Meta{}, err
+	}
+	if meta.Kind, err = stringMetaField(object, "kind"); err != nil {
 		return Meta{}, err
 	}
 	if meta.Key, err = stringMetaField(object, "key"); err != nil {
@@ -1186,7 +1334,7 @@ func decodeMeta(value any) (Meta, error) {
 	if meta.Auth.Type != "" && meta.Auth.Type != "none" && meta.Auth.Type != "api_key" && meta.Auth.Type != "oauth2_jwt" {
 		return Meta{}, fmt.Errorf("unsupported plugin auth type %q", meta.Auth.Type)
 	}
-	if meta.APIVersion != APIVersion1 {
+	if meta.APIVersion != APIVersion1 && meta.APIVersion != APIVersion2 {
 		return Meta{}, fmt.Errorf("unsupported plugin apiVersion %d", meta.APIVersion)
 	}
 	if strings.TrimSpace(meta.Key) == "" || strings.TrimSpace(meta.Name) == "" || strings.TrimSpace(meta.Version) == "" {
@@ -1255,8 +1403,19 @@ func normalizeV1Meta(meta *Meta) error {
 			}
 		}
 	}
-	if meta.APIVersion != APIVersion1 {
+	if meta.APIVersion != APIVersion1 && meta.APIVersion != APIVersion2 {
 		return fmt.Errorf("unsupported plugin apiVersion %d", meta.APIVersion)
+	}
+	meta.Kind = strings.TrimSpace(meta.Kind)
+	if meta.Kind == "" {
+		// An apiVersion 1 manifest predates kinds and is a task driver.
+		meta.Kind = defaultPluginKind
+	}
+	if !isKnownPluginKind(meta.Kind) {
+		return fmt.Errorf("plugin meta kind must be one of %s, %s, %s", PluginKindTask, PluginKindJob, PluginKindIdentity)
+	}
+	if meta.APIVersion == APIVersion1 && meta.Kind != PluginKindTask {
+		return fmt.Errorf("plugin meta kind %q requires apiVersion %d", meta.Kind, APIVersion2)
 	}
 	if strings.TrimSpace(meta.Name) == "" {
 		return fmt.Errorf("plugin meta name is required")
@@ -1314,11 +1473,18 @@ func normalizeV1Meta(meta *Meta) error {
 	if !pluginVersionPattern.MatchString(meta.Version) {
 		return fmt.Errorf("plugin meta version must be semver")
 	}
-	if meta.FetchMode != "per_task" && meta.FetchMode != "batch" {
-		return fmt.Errorf("plugin meta fetchMode must be per_task or batch")
-	}
-	if len(meta.Models) == 0 {
-		return fmt.Errorf("plugin meta models must contain at least one model")
+	// fetchMode, models and channel bindings describe how a task driver is
+	// reached. A job or identity plugin owns no relay surface, so requiring
+	// them would force meaningless values into its manifest.
+	if meta.RequiresTaskDriverHooks() {
+		if meta.FetchMode != "per_task" && meta.FetchMode != "batch" {
+			return fmt.Errorf("plugin meta fetchMode must be per_task or batch")
+		}
+		if len(meta.Models) == 0 {
+			return fmt.Errorf("plugin meta models must contain at least one model")
+		}
+	} else if meta.FetchMode != "" && meta.FetchMode != "per_task" && meta.FetchMode != "batch" {
+		return fmt.Errorf("plugin meta fetchMode must be per_task or batch when set")
 	}
 	seenChannelTypes := make(map[int]struct{}, len(meta.ChannelTypes))
 	for _, channelType := range meta.ChannelTypes {
@@ -2142,6 +2308,88 @@ func quotedJoin(items []string, sep string) string {
 		parts[index] = fmt.Sprintf("%q", item)
 	}
 	return strings.Join(parts, sep)
+}
+
+// PluginKindContract is the published description of one plugin kind: the
+// manifest members it requires, the exports it obliges, and the host surfaces
+// it must not declare.
+type PluginKindContract struct {
+	Kind                  string                  `json:"kind"`
+	Description           string                  `json:"description"`
+	MinAPIVersion         int                     `json:"minApiVersion"`
+	RequiredMetaFields    []string                `json:"requiredMetaFields"`
+	ForbiddenMetaFields   []string                `json:"forbiddenMetaFields"`
+	RequiredHooks         []PluginHookRequirement `json:"requiredHooks"`
+	OptionalHooks         []PluginHookRequirement `json:"optionalHooks,omitempty"`
+	DeclarationVariants   []PluginKindVariant     `json:"declarationVariants"`
+	SupportsRelaySurfaces bool                    `json:"supportsRelaySurfaces"`
+}
+
+// PluginKindVariant is one answer a manifest may give to the optional member
+// a kind's hook requirements branch on, with the resulting hook set. The set is
+// a replacement, not an addition: `fetchMode: "batch"` drops the single-task
+// query hook.
+type PluginKindVariant struct {
+	Field string   `json:"field"`
+	Value string   `json:"value"`
+	Hooks []string `json:"hooks"`
+}
+
+// PluginKinds publishes the kind contract of this host release. Its hook
+// requirements come from the functions the compiler enforces, so a change to
+// the compiler reaches this endpoint without a second list to update.
+func PluginKinds() []PluginKindContract {
+	manifestOnly := Meta{APIVersion: APIVersion2, Kind: PluginKindTask, SubmitResponseTypes: []string{"json"}, FetchMode: "per_task"}
+	baseHooks := TaskDriverHookRequirements(manifestOnly, false)
+	snapshotHooks := TaskDriverHookRequirements(Meta{SubmitResponseTypes: []string{"json", "sse"}, FetchMode: "per_task"}, false)
+	deltaHooks := TaskDriverHookRequirements(Meta{SubmitResponseTypes: []string{"json", "sse"}, FetchMode: "per_task"}, true)
+	batchHooks := TaskDriverHookRequirements(Meta{SubmitResponseTypes: []string{"json"}, FetchMode: "batch"}, false)
+	return []PluginKindContract{
+		{
+			Kind:                  PluginKindTask,
+			Description:           "Asynchronous task driver: submits a job, polls it, and settles its usage.",
+			MinAPIVersion:         APIVersion1,
+			RequiredMetaFields:    []string{"key", "name", "version", "author", "models"},
+			ForbiddenMetaFields:   []string{},
+			RequiredHooks:         baseHooks,
+			OptionalHooks:         RequiredHooksOfAssets,
+			SupportsRelaySurfaces: true,
+			DeclarationVariants: []PluginKindVariant{
+				{Field: PluginRequirementFieldSubmitResponseTypes, Value: "sse", Hooks: hookNamesOf(snapshotHooks)},
+				{Field: PluginRequirementFieldSubmitResponseTypes, Value: "sse (delta events)", Hooks: hookNamesOf(deltaHooks)},
+				{Field: PluginRequirementFieldFetchMode, Value: "batch", Hooks: hookNamesOf(batchHooks)},
+			},
+		},
+		{
+			Kind:                  PluginKindJob,
+			Description:           "Scheduled system task contributed to the host task registry; owns no relay surface.",
+			MinAPIVersion:         APIVersion2,
+			RequiredMetaFields:    []string{"key", "name", "version", "author"},
+			ForbiddenMetaFields:   []string{"routes", "protocols", "channelTypes"},
+			RequiredHooks:         []PluginHookRequirement{},
+			SupportsRelaySurfaces: false,
+			DeclarationVariants:   []PluginKindVariant{},
+		},
+		{
+			Kind:                  PluginKindIdentity,
+			Description:           "OAuth/OIDC identity source reporting who the upstream authenticated; the host still issues and validates sessions.",
+			MinAPIVersion:         APIVersion2,
+			RequiredMetaFields:    []string{"key", "name", "version", "author"},
+			ForbiddenMetaFields:   []string{"routes", "protocols", "channelTypes"},
+			RequiredHooks:         []PluginHookRequirement{},
+			SupportsRelaySurfaces: false,
+			DeclarationVariants:   []PluginKindVariant{},
+		},
+	}
+}
+
+// hookNamesOf lists requirement hooks in manifest order.
+func hookNamesOf(requirements []PluginHookRequirement) []string {
+	hooks := make([]string, len(requirements))
+	for i, requirement := range requirements {
+		hooks[i] = requirement.Hook
+	}
+	return hooks
 }
 
 func strictStringSlice(object map[string]any, name string) ([]string, error) {

@@ -520,6 +520,72 @@ func TestRegistryValidatesUsageExamples(t *testing.T) {
 	})
 }
 
+func TestRegistryTreatsAPIVersionOneManifestAsTaskDriver(t *testing.T) {
+	registry := NewRegistry()
+	_, err := registry.RegisterFactory(`
+export const meta = {apiVersion:1,key:"legacy",name:"Legacy",version:"1.0.0",author:{name:"Test"},models:["legacy-model"],fetchMode:"per_task"};
+export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}
+`, Options{})
+	require.NoError(t, err)
+	plugin, ok := registry.Get("legacy")
+	require.True(t, ok)
+	assert.Equal(t, PluginKindTask, plugin.Meta.Kind)
+	assert.True(t, plugin.Meta.RequiresTaskDriverHooks())
+}
+
+func TestRegistryLoadsNonTaskKindWithoutTaskDriverHooks(t *testing.T) {
+	registry := NewRegistry()
+	_, err := registry.RegisterFactory(`
+export const meta = {apiVersion:2,kind:"job",key:"nightly",name:"Nightly",version:"1.0.0",author:{name:"Test"},models:[]};
+export function run(){return {ok:true}}
+`, Options{})
+	require.NoError(t, err)
+	plugin, ok := registry.Get("nightly")
+	require.True(t, ok)
+	assert.Equal(t, PluginKindJob, plugin.Meta.Kind)
+	assert.False(t, plugin.Meta.RequiresTaskDriverHooks())
+}
+
+func TestRegistryRejectsNonTaskKindOnAPIVersionOne(t *testing.T) {
+	registry := NewRegistry()
+	_, err := registry.RegisterFactory(`
+export const meta = {apiVersion:1,kind:"job",key:"nightly",name:"Nightly",version:"1.0.0",author:{name:"Test"},models:[]};
+`, Options{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "apiVersion 2")
+}
+
+func TestRegistryRejectsUnknownPluginKind(t *testing.T) {
+	registry := NewRegistry()
+	_, err := registry.RegisterFactory(`
+export const meta = {apiVersion:2,kind:"middleware",key:"mw",name:"MW",version:"1.0.0",author:{name:"Test"},models:[]};
+`, Options{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "kind must be one of")
+}
+
+func TestRegistryRejectsRelaySurfaceOnJobKind(t *testing.T) {
+	registry := NewRegistry()
+	for _, testCase := range []struct {
+		name   string
+		extra  string
+		expect string
+	}{
+		{name: "routes", extra: `routes:[{method:"POST",path:"/nightly/run",type:"submit",decode:"a",render:"b"}]`, expect: "must not declare routes"},
+		{name: "channel bind", extra: `channelTypes:[1001]`, expect: "must not bind channel types"},
+		{name: "protocol", extra: `protocols:["openai_video"]`, expect: "must not claim host protocols"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := registry.RegisterFactory(`
+export const meta = {apiVersion:2,kind:"job",key:"nightly",name:"Nightly",version:"1.0.0",author:{name:"Test"},models:[],`+testCase.extra+`};
+export function run(){return {ok:true}}
+`, Options{})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), testCase.expect)
+		})
+	}
+}
+
 func TestRegistryFindsEffectivePluginByBuiltInChannelType(t *testing.T) {
 	registry := NewRegistry()
 	_, err := registry.RegisterFactory(`

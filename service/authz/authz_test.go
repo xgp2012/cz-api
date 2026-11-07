@@ -272,6 +272,42 @@ func TestAdapterAddPolicyIsIdempotent(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
+func TestRegisterResourceIgnoresDuplicateDeclaration(t *testing.T) {
+	// Registration runs from package init, including from plugins. A duplicate
+	// resource must not double the catalog or a role's baseline grants.
+	registryMu.Lock()
+	saved := registry
+	registry = nil
+	registryMu.Unlock()
+	t.Cleanup(func() {
+		registryMu.Lock()
+		registry = saved
+		registryMu.Unlock()
+	})
+
+	RegisterResource(ResourceDefinition{
+		Resource: "plugin_widget",
+		LabelKey: "Widget",
+		Actions:  []ActionDefinition{{Action: "read", LabelKey: "Read", DefaultRoles: []string{BuiltInRoleAdmin}}},
+	})
+	RegisterResource(ResourceDefinition{
+		Resource: "plugin_widget",
+		LabelKey: "Widget duplicate",
+		Actions:  []ActionDefinition{{Action: "write", LabelKey: "Write", DefaultRoles: []string{BuiltInRoleAdmin}}},
+	})
+	RegisterResource(ResourceDefinition{Resource: ""})
+
+	catalog := Catalog()
+	require.Len(t, catalog, 1)
+	assert.Equal(t, "plugin_widget", catalog[0].Resource)
+	require.Len(t, catalog[0].Actions, 1)
+	assert.Equal(t, "read", catalog[0].Actions[0].Action)
+
+	assert.True(t, isKnownResource("plugin_widget"))
+	assert.True(t, isKnownPermission(Permission{Resource: "plugin_widget", Action: "read"}))
+	assert.False(t, isKnownPermission(Permission{Resource: "plugin_widget", Action: "write"}))
+}
+
 func TestCapabilitiesUseCatalogShape(t *testing.T) {
 	db := newAuthzTestDB(t)
 	require.NoError(t, Init(db))

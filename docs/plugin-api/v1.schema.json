@@ -1,17 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/QuantumNous/new-api/docs/plugin-api/v1.schema.json",
-  "title": "new-api Task Plugin v1 manifest",
+  "title": "new-api Plugin manifest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "key", "name", "version", "author", "models", "fetchMode"],
+  "required": ["apiVersion", "key", "name", "version", "author"],
   "properties": {
     "sortPriority": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 0},
     "website": {"oneOf": [{"const": ""}, {"type": "string", "format": "uri", "pattern": "^[Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+(?:[/?#]|$)"}], "description": "Absolute HTTPS URL with a valid ASCII hostname (use punycode for internationalized domains) and no credentials; validated by the host."},
-    "apiVersion": {"const": 1}, "key": {"type": "string"}, "name": {"type": "string"}, "icon": {"type": "string", "maxLength": 128}, "description": {"$ref": "#/$defs/localizedText"}, "version": {"type": "string"},
+    "apiVersion": {"enum": [1, 2]},
+    "kind": {"enum": ["task", "job", "identity"], "default": "task", "description": "What the host may use the plugin for. Omitted kind means task, so every apiVersion 1 manifest loads unchanged as a task driver. A kind other than task requires apiVersion 2. job and identity plugins may not declare routes, protocols, or channelTypes (the host rejects them), are not required to declare models or fetchMode, and are not required to export the task driver hooks."},
+    "key": {"type": "string"}, "name": {"type": "string"}, "icon": {"type": "string", "maxLength": 128}, "description": {"$ref": "#/$defs/localizedText"}, "version": {"type": "string"},
     "author": {"type": "object", "required": ["name"], "additionalProperties": false, "properties": {"name": {"type": "string"}, "url": {"type": "string", "format": "uri"}}},
     "baseUrl": {"type": "string", "format": "uri", "pattern": "^https?://", "maxLength": 191},
-    "channelTypes": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}}, "models": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "channelTypes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}}, "models": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
     "fetchMode": {"enum": ["per_task", "batch"]}, "allowedHosts": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
     "upstreams": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/upstreamKind"}, "description": "Upstream kinds the driver addresses. vendor is implied; new_api makes the plugin bindable to type-60 New API channels."},
     "protocols": {"type": "array", "uniqueItems": true, "items": {"oneOf": [
@@ -23,7 +25,30 @@
     "requiredCapabilities": {"type": "array", "uniqueItems": true, "items": {"enum": ["json-clone@1", "submit-sse-delta@1", "json-order@1", "duration-auto@1"]}},
     "routes": {"type": "array", "items": {"$ref": "#/$defs/route"}}, "usageSchema": {"type": "object", "additionalProperties": {"$ref": "#/$defs/usageField"}}, "usageExamples": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["label", "facts"], "properties": {"label": {"type": "string"}, "facts": {"type": "object"}}}}, "usageProfiles": {"type": "array", "items": {"$ref": "#/$defs/usageProfile"}}, "auth": {}
   },
-  "allOf": [{"if": {"required": ["requiredCapabilities"], "properties": {"requiredCapabilities": {"contains": {"const": "submit-sse-delta@1"}}}}, "then": {"required": ["submitResponseTypes"], "properties": {"submitResponseTypes": {"contains": {"const": "sse"}}}}}],
+  "allOf": [
+    {"description": "kind omitted or \"task\": a task driver requires models and fetchMode.",
+     "if": {"anyOf": [{"not": {"required": ["kind"]}}, {"properties": {"kind": {"const": "task"}}, "required": ["kind"]}]},
+     "then": {
+       "properties": {
+         "models": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+         "fetchMode": {"enum": ["per_task", "batch"]}
+       },
+       "required": ["models", "fetchMode"]
+     }},
+    {"description": "kind \"job\" or \"identity\": apiVersion 2, and no routes, protocols, or channelTypes. models and fetchMode are free to be omitted, and models may be empty.",
+     "if": {"properties": {"kind": {"enum": ["job", "identity"]}}, "required": ["kind"]},
+     "then": {"required": ["apiVersion"],
+              "allOf": [{"properties": {"apiVersion": {"const": 2}}}],
+              "properties": {"routes": {"maxItems": 0},
+                             "protocols": {"maxItems": 0},
+                             "channelTypes": {"maxItems": 0},
+                             "models": {"type": "array"},
+                             "fetchMode": {"enum": ["per_task", "batch"]}}}},
+    {"description": "The task plugin channel type (61) and the New API channel type (60) are never declared; a plugin is bound to those channels by key.",
+     "if": {"required": ["channelTypes"]},
+     "then": {"properties": {"channelTypes": {"items": {"not": {"enum": [60, 61]}}}}}},
+    {"description": "submit-sse-delta@1 requires an sse submission.", "if": {"required": ["requiredCapabilities"], "properties": {"requiredCapabilities": {"contains": {"const": "submit-sse-delta@1"}}}}, "then": {"required": ["submitResponseTypes"], "properties": {"submitResponseTypes": {"contains": {"const": "sse"}}}}}
+  ],
   "$defs": {
     "jsonChange": {
       "type": "object", "additionalProperties": false, "required": ["op", "path", "value"],
