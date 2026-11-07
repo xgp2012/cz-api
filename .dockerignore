@@ -1,12 +1,62 @@
+# Keep this file explicit: every entry is a path the Docker build never reads,
+# and a broad glob here silently drops files a later COPY needs.
+#
+# Because the exclusions are pattern-level (node_modules, dist, *.md), the
+# files the Dockerfile copies explicitly must stay visible: web/package.json,
+# web/bun.lock, web/.npmrc, relaykit/ and tokenkit/ Go sources, VERSION, and
+# the repository-root licence files.
+
+# Repository automation and editor state.
 .github
 .git
-*.md
 .vscode
+.vscode-test
+.idea
+.devcontainer
+.githooks
 .gitignore
-Makefile
+.gitattributes
+.dockerignore
+
+# Documentation and the Electron wrapper (its own npm project).
+*.md
 docs
+electron
+
+# Development-only tooling and local artifacts.
+Makefile
+makefile
+docker-compose.yml
+docker-compose.dev.yml
+typescript
+bin
+e2e
+integration
+.reports
 .eslintcache
 .gocache
+.golangci.yml
+.tool-versions
+*.log
+*.sh
+.env*
+
+# Frontend trees that are installed or generated inside the image.
 /web/node_modules
 /web/dist
+/web/coverage
+/web/.tanstack
+/web/.bun
+/web/.rsbuild
+/web/src/i18n/locales/_reports
+
+# Local Go build output.
+/new-api
+/new-api-*
+*.test
+*.exe
+
+# The only negation this file can carry safely: no directory leading to this
+# path is excluded, and the pattern that would otherwise drop it is a
+# file-name glob rather than a directory rule.
 !THIRD-PARTY-LICENSES.md

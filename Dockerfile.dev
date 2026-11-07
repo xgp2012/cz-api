@@ -1,9 +1,15 @@
-# Backend-only build for frontend development
-# Skips frontend build and uses a placeholder for //go:embed web/dist
+# syntax=docker/dockerfile:1.7
+#
+# Backend-only image for frontend development. Skips the Rsbuild build and
+# embeds a placeholder for //go:embed web/dist, so a Go edit rebuilds in
+# seconds against the warmed module and compiler caches.
 
-FROM golang:1.26.10-alpine AS builder
+ARG GO_IMAGE=golang:1.26.10-alpine
+ARG RUNTIME_IMAGE=debian:bookworm-slim
 
-ENV GO111MODULE=on CGO_ENABLED=0
+FROM ${GO_IMAGE} AS builder
+
+ENV GO111MODULE=on CGO_ENABLED=0 GOWORK=off
 ARG TARGETOS
 ARG TARGETARCH
 ENV GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64}
@@ -11,21 +17,26 @@ ENV GOEXPERIMENT=greenteagc
 
 WORKDIR /build
 
-ADD go.mod go.sum ./
+COPY go.mod go.sum ./
 # relaykit and tokenkit are local submodules referenced via replace; their
 # go.mod files must be present for go mod download to resolve the main module graph.
-ADD relaykit/go.mod ./relaykit/go.mod
-ADD tokenkit/go.mod ./tokenkit/go.mod
-RUN go mod download
+COPY relaykit/go.mod ./relaykit/go.mod
+COPY tokenkit/go.mod ./tokenkit/go.mod
+RUN --mount=type=cache,id=go-mod,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=go-build,target=/root/.cache/go-build,sharing=locked \
+    go mod download
 
 COPY . .
 
-RUN mkdir -p web/dist && \
-    echo '<!doctype html><html><head><title>dev</title></head><body>use frontend dev server</body></html>' > web/dist/index.html
+RUN --mount=type=cache,id=go-mod,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=go-build,target=/root/.cache/go-build,sharing=locked \
+    mkdir -p web/dist && \
+    echo '<!doctype html><html><head><title>dev</title></head><body>use frontend dev server</body></html>' > web/dist/index.html && \
+    go build -trimpath \
+        -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" \
+        -o new-api
 
-RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
-
-FROM debian:bookworm-slim
+FROM ${RUNTIME_IMAGE}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata wget \

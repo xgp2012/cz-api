@@ -1,0 +1,165 @@
+name: Docker image
+
+# Publishes the image to GitHub Container Registry on every push to main.
+# The build is intentionally shaped for wall-clock time:
+#
+#   * one native runner per architecture, never QEMU emulation;
+#   * buildx image cache in the GitHub Actions cache, so an unchanged layer
+#     (base images, apt, bun install, go mod download, go build) is restored
+#     rather than recomputed;
+#   * a per-ref concurrency group, so a rapid second push cancels the build
+#     that can no longer be the deployed artifact instead of running both.
+#
+# The cache scope is separate from .github/workflows/docker-build.yml so the
+# two workflows never thrash each other's cache entries.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/docker-publish.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # GitHub Container Registry requires the repository owner in lower case.
+  IMAGE: ghcr.io/${{ github.repository }}
+  CACHE_SCOPE: czapi-${{ github.ref_name }}
+
+jobs:
+  build:
+    name: Build & push (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+
+      - name: Prepare image metadata
+        id: version
+        run: |
+          # An empty VERSION file is committed on purpose and .dockerignore
+          # keeps it out of the build context, so the published tags carry the
+          # commit identity instead.
+          BUILD_VERSION="$(git rev-parse --short HEAD)"
+          echo "version=${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building ${IMAGE}:${BUILD_VERSION} for ${{ matrix.arch }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          # Pull requests only validate the build; pushes publish the per-arch
+          # image that the manifest job below stitches together.
+          push: ${{ github.event_name != 'pull_request' }}
+          # Keep the image digest stable: SBOM/provenance descriptors are extra
+          # layers and registry round-trips on every matrix entry.
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}-${{ matrix.arch }}
+
+      - name: Record image digest
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          # The digest is the only handle a later job has on this build, so stop
+          # here instead of publishing a tag that resolves to nothing.
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::build-push-action did not report an image digest"
+            exit 1
+          fi
+
+      - name: Push per-architecture tag
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+          COMMIT_TAG: sha-${{ steps.version.outputs.version }}
+        run: |
+          # build-push-action can only name tags that live in one manifest, so
+          # the tag is applied here by digest. Re-tagging is a manifest write,
+          # not a rebuild.
+          docker buildx imagetools create \
+            -t "${IMAGE}:${COMMIT_TAG}-${ARCH}" \
+            "${IMAGE}@${DIGEST}"
+
+  manifest:
+    name: Publish multi-arch manifest
+    needs: [build]
+    if: github.event_name != 'pull_request' && needs.build.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch tags
+        env:
+          COMMIT_TAG: sha-${{ needs.build.outputs.version }}
+        run: |
+          # `latest` follows main only, and every build also publishes an
+          # immutable commit tag. A repository with no release tags therefore
+          # still resolves the tag `latest` points at.
+          TAGS=("${COMMIT_TAG}")
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAGS+=("${GITHUB_REF_NAME}")
+          elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            TAGS+=("latest")
+          fi
+          for TAG in "${TAGS[@]}"; do
+            echo "::group::${IMAGE}:${TAG}"
+            docker buildx imagetools create \
+              -t "${IMAGE}:${TAG}" \
+              "${IMAGE}:${COMMIT_TAG}-amd64" \
+              "${IMAGE}:${COMMIT_TAG}-arm64"
+            docker buildx imagetools inspect "${IMAGE}:${TAG}"
+            echo "::endgroup::"
+          done
