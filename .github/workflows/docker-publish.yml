@@ -10,8 +10,8 @@ name: Docker image
 #   * a per-ref concurrency group, so a rapid second push cancels the build
 #     that can no longer be the deployed artifact instead of running both.
 #
-# The cache scope is separate from .github/workflows/docker-build.yml so the
-# two workflows never thrash each other's cache entries.
+# This is the only workflow that builds the image: the upstream Docker Hub
+# publisher it replaces required DOCKERHUB_* secrets the fork does not hold.
 
 on:
   push:
