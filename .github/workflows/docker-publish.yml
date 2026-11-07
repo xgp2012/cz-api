@@ -93,6 +93,9 @@ jobs:
           # Pull requests only validate the build; pushes publish the per-arch
           # image that the manifest job below stitches together.
           push: ${{ github.event_name != 'pull_request' }}
+          # buildx refuses to push without a tag, and this job is the only
+          # matrix entry that can name its own architecture-specific tag.
+          tags: ${{ env.IMAGE }}:sha-${{ steps.version.outputs.version }}-${{ matrix.arch }}
           # Keep the image digest stable: SBOM/provenance descriptors are extra
           # layers and registry round-trips on every matrix entry.
           provenance: false
@@ -100,31 +103,20 @@ jobs:
           cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}-${{ matrix.arch }}
 
-      - name: Record image digest
-        if: github.event_name != 'pull_request'
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          # The digest is the only handle a later job has on this build, so stop
-          # here instead of publishing a tag that resolves to nothing.
-          if [ -z "${DIGEST}" ]; then
-            echo "::error::build-push-action did not report an image digest"
-            exit 1
-          fi
-
-      - name: Push per-architecture tag
+      - name: Check pushed digest
         if: github.event_name != 'pull_request'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           ARCH: ${{ matrix.arch }}
           COMMIT_TAG: sha-${{ steps.version.outputs.version }}
         run: |
-          # build-push-action can only name tags that live in one manifest, so
-          # the tag is applied here by digest. Re-tagging is a manifest write,
-          # not a rebuild.
-          docker buildx imagetools create \
-            -t "${IMAGE}:${COMMIT_TAG}-${ARCH}" \
-            "${IMAGE}@${DIGEST}"
+          # The manifest job addresses this build by tag and assumes it exists,
+          # so fail here rather than publish a manifest over a missing image.
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::build-push-action did not report an image digest"
+            exit 1
+          fi
+          echo "Pushed ${IMAGE}:${COMMIT_TAG}-${ARCH}@${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
 
   manifest:
     name: Publish multi-arch manifest
