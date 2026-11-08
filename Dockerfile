@@ -60,6 +60,12 @@ FROM ${GO_IMAGE} AS build_backend
 # The two submodules are wired in through `replace`; GOWORK=off keeps the root
 # module independent of any workspace file.
 ENV GO111MODULE=on CGO_ENABLED=0 GOWORK=off
+# Build-time module metadata lookups need a registry the build can reach. When
+# they miss the local module cache and the default endpoints are unreachable,
+# `go list -m` prints nothing and the failure surfaces as "preprofile: error
+# opening profile: open /default.pgo: no such file or directory". The fallback
+# chain keeps a reachable default working.
+ENV GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct
 
 ARG TARGETOS
 ARG TARGETARCH
