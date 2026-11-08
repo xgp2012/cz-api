@@ -54,6 +54,10 @@ import {
   getChannelPluginExtensions,
   LEGACY_TASK_PLUGIN_KEYS,
 } from '../../lib/channel-plugin-extensions'
+import {
+  isOfferableChannelType,
+  useChannelTypeDirectory,
+} from '../../lib/channel-type-directory'
 import { ChannelTypeLogo } from '../channel-type-badge'
 
 type ChannelProviderPickerProps = {
@@ -73,6 +77,17 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
   const shouldReduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const [search, setSearch] = useState('')
   const [selectedFilter, setSelectedFilter] = useState('all')
+  // The gateway publishes which types it can serve, so the picker follows the
+  // backend instead of a local table that can drift from the adaptor registry.
+  const { data: directory, isLoading: isDirectoryLoading } =
+    useChannelTypeDirectory()
+  const offerableTypes = useMemo(
+    () =>
+      (directory ?? [])
+        .filter(isOfferableChannelType)
+        .map((entry) => entry.type),
+    [directory]
+  )
   const filter =
     !props.canBindPlugin && selectedFilter === 'plugin' ? 'all' : selectedFilter
   const keyword = search.trim().toLocaleLowerCase()
@@ -83,6 +98,7 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
         : []
     const pluginAliases = new Map<string, string>()
     const replacedTypes = new Set<number>()
+    const offerable = new Set(offerableTypes)
     if (props.isCreating) {
       const availablePluginKeys = new Set(
         availablePlugins.map((plugin) => plugin.key)
@@ -115,6 +131,8 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
       searchText: string
     }> = []
     for (const option of CHANNEL_TYPE_OPTIONS) {
+      // A type the gateway does not publish cannot be chosen for a new channel.
+      if (props.isCreating && !offerable.has(option.value)) continue
       if (option.value === CHANNEL_TYPE_TASK_PLUGIN) {
         if (!props.canBindPlugin || (filter !== 'all' && filter !== 'plugin')) {
           continue
@@ -133,9 +151,6 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
           })
         }
       } else if (filter !== 'plugin') {
-        // Keep legacy Zhipu available when editing existing channels.
-        if (props.isCreating && option.value === 16) continue
-        if (props.isCreating && option.value === 7) continue
         if (replacedTypes.has(option.value)) continue
         const isCustom =
           option.value === 8 || option.value === CHANNEL_TYPE_ADVANCED_CUSTOM
@@ -184,6 +199,7 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
     filter,
     i18n.language,
     keyword,
+    offerableTypes,
     props.isCreating,
     props.canBindPlugin,
     props.currentProvider,
@@ -194,7 +210,10 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
   ])
 
   const customType = Number(search.trim())
+  // Without the directory the picker cannot tell a live type from an empty slot,
+  // so it does not offer to create a channel by raw number.
   const canUseCustomType =
+    Boolean(directory) &&
     (filter === 'all' || filter === 'custom') &&
     /^\d+$/.test(search.trim()) &&
     Number.isSafeInteger(customType) &&
@@ -258,7 +277,11 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
             aria-label={t('Search providers, plugins, or type numbers')}
           />
           <CommandList className='mt-3 max-h-none min-h-0 flex-1'>
-            <CommandEmpty>{t('No matching provider')}</CommandEmpty>
+            <CommandEmpty>
+              {isDirectoryLoading
+                ? t('Loading providers...')
+                : t('No matching provider')}
+            </CommandEmpty>
             <CommandGroup className='p-1 [&_[cmdk-group-items]]:grid [&_[cmdk-group-items]]:gap-2.5 md:[&_[cmdk-group-items]]:grid-cols-2 xl:[&_[cmdk-group-items]]:grid-cols-3'>
               {options.map((option) => (
                 <CommandItem

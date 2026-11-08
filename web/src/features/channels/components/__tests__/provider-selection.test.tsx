@@ -1,3 +1,4 @@
+import { QueryClientProvider } from '@tanstack/react-query'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -16,16 +17,62 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { act, render, screen, within } from '@testing-library/react'
+import {
+  act,
+  render as rtlRender,
+  screen,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createInstance } from 'i18next'
+import type { ReactElement } from 'react'
 import { I18nextProvider } from 'react-i18next'
 import { expect, test, vi } from 'vitest'
 
 import zh from '@/i18n/locales/zh.json'
+import { createAppQueryClient } from '@/lib/query-client'
 
 import type { TaskPluginOption } from '../../api'
 import { ChannelProviderPicker } from '../drawers/channel-provider-picker'
+
+// The picker reads the channel type directory the gateway publishes instead of a
+// local table, so every case needs the directory query available in its
+// QueryClient. These types are offerable, matching what the gateway reports for
+// the built-in adaptors the cases exercise.
+const directoryTypes = [
+  1, 4, 7, 8, 14, 17, 20, 24, 26, 33, 35, 36, 41, 43, 45, 50, 51, 52, 54, 55,
+  56, 57, 58, 59, 60, 61, 62,
+]
+
+vi.mock('../../api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api')>()
+  return {
+    ...actual,
+    getChannelTypeDirectory: vi.fn(async () =>
+      directoryTypes.map((type) => ({
+        type,
+        name: `type-${type}`,
+        baseURL: '',
+        requiresBaseURL: false,
+        deprecated: false,
+        plugin: false,
+        kind: 'chat',
+        protocol: 'openai',
+        configurable: true,
+      }))
+    ),
+  }
+})
+
+function renderPicker(ui: ReactElement) {
+  return rtlRender(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={createAppQueryClient()}>
+        {children}
+      </QueryClientProvider>
+    ),
+  })
+}
 
 const plugins = [
   {
@@ -73,7 +120,7 @@ const extensionPlugin: TaskPluginOption = {
 test('creation hides legacy Zhipu from categories and numeric search while GLM remains selectable', async () => {
   const user = userEvent.setup()
   const select = vi.fn()
-  render(
+  renderPicker(
     <ChannelProviderPicker
       isCreating
       currentProvider={{ kind: 'builtin', type: 16 }}
@@ -92,7 +139,7 @@ test('creation hides legacy Zhipu from categories and numeric search while GLM r
   await user.type(search, 'zhi')
   expect(screen.getAllByRole('option')).toHaveLength(1)
   await user.click(
-    screen.getByRole('option', { name: 'Zhipu GLM Built-in #26' })
+    await screen.findByRole('option', { name: 'Zhipu GLM Built-in #26' })
   )
   expect(select).toHaveBeenCalledWith({ kind: 'builtin', type: 26 })
   await user.clear(search)
@@ -105,7 +152,7 @@ test('creation hides legacy Zhipu from categories and numeric search while GLM r
 test('editing an existing legacy Zhipu channel retains its selectable provider', async () => {
   const user = userEvent.setup()
   const select = vi.fn()
-  render(
+  renderPicker(
     <ChannelProviderPicker
       isCreating={false}
       currentProvider={{ kind: 'builtin', type: 16 }}
@@ -119,7 +166,9 @@ test('editing an existing legacy Zhipu channel retains its selectable provider',
     />
   )
   await user.type(screen.getByRole('combobox'), '16')
-  const legacy = screen.getByRole('option', { name: 'Zhipu Built-in #16' })
+  const legacy = await screen.findByRole('option', {
+    name: 'Zhipu Built-in #16',
+  })
   expect(legacy).toHaveAttribute('aria-current', 'true')
   await user.click(legacy)
   expect(select).toHaveBeenCalledWith({ kind: 'builtin', type: 16 })
@@ -133,7 +182,7 @@ test('Zhipu GLM uses the renamed Chinese label and remains searchable after chan
     resources: { en: { translation: {} }, zh },
   })
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <I18nextProvider i18n={language}>
       <ChannelProviderPicker
         isCreating
@@ -149,7 +198,7 @@ test('Zhipu GLM uses the renamed Chinese label and remains searchable after chan
   )
   await user.type(screen.getByRole('combobox'), 'GLM')
   expect(
-    screen.getByRole('option', { name: 'Zhipu GLM Built-in #26' })
+    await screen.findByRole('option', { name: 'Zhipu GLM Built-in #26' })
   ).toBeVisible()
   await act(() => language.changeLanguage('zh'))
   expect(screen.getByRole('option', { name: '智谱GLM 内置 #26' })).toBeVisible()
@@ -158,7 +207,7 @@ test('Zhipu GLM uses the renamed Chinese label and remains searchable after chan
 test('plugin extensions keep built-in and independent plugin choices distinct in every category', async () => {
   const select = vi.fn()
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <ChannelProviderPicker
       isCreating
       currentProvider={{ kind: 'builtin', type: 1 }}
@@ -171,7 +220,10 @@ test('plugin extensions keep built-in and independent plugin choices distinct in
       onSelect={select}
     />
   )
-  const builtin = screen.getByRole('option', { name: 'OpenAI Built-in #1' })
+  // The directory query resolves before the picker can list a type's providers.
+  const builtin = await screen.findByRole('option', {
+    name: 'OpenAI Built-in #1',
+  })
   expect(builtin).toHaveClass('min-h-24', 'md:min-h-32')
   expect(builtin).toHaveAttribute('aria-current', 'true')
   const extension = within(builtin).getByLabelText('Plugin extensions')
@@ -213,7 +265,7 @@ test.each(['Sora Video', 'sora'])(
   'searching extension %s finds both its built-in provider and independent plugin',
   async (searchText) => {
     const user = userEvent.setup()
-    render(
+    renderPicker(
       <ChannelProviderPicker
         isCreating
         plugins={[extensionPlugin]}
@@ -248,8 +300,8 @@ test.each([
   },
 ])(
   'built-in providers omit extension claims when metadata is $name',
-  (state) => {
-    render(
+  async (state) => {
+    renderPicker(
       <ChannelProviderPicker
         isCreating
         plugins={[
@@ -270,14 +322,14 @@ test.each([
       />
     )
     expect(
-      screen.getByRole('option', { name: 'OpenAI Built-in #1' })
+      await screen.findByRole('option', { name: 'OpenAI Built-in #1' })
     ).toBeVisible()
     expect(screen.queryByLabelText('Plugin extensions')).not.toBeInTheDocument()
   }
 )
 
-test('extension associations follow declared types and exclude legacy task-only types', () => {
-  render(
+test('extension associations follow declared types and exclude legacy task-only types', async () => {
+  renderPicker(
     <ChannelProviderPicker
       plugins={[
         { ...extensionPlugin, name: 'OpenAI', channelTypes: [24, 55, 61, 999] },
@@ -290,7 +342,9 @@ test('extension associations follow declared types and exclude legacy task-only 
       onSelect={vi.fn()}
     />
   )
-  const gemini = screen.getByRole('option', { name: 'Gemini Built-in #24' })
+  const gemini = await screen.findByRole('option', {
+    name: 'Gemini Built-in #24',
+  })
   expect(within(gemini).getByLabelText('Plugin extensions')).toBeVisible()
   for (const name of [
     'OpenAI Built-in #1',
@@ -307,7 +361,7 @@ test('extension associations follow declared types and exclude legacy task-only 
 
 test('creation replaces migrated built-ins with their plugins in both all and built-in categories', async () => {
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <ChannelProviderPicker
       isCreating
       plugins={migratedPlugins}
@@ -321,7 +375,7 @@ test('creation replaces migrated built-ins with their plugins in both all and bu
   )
   for (const provider of migratedProviders) {
     expect(
-      screen.getByRole('option', {
+      await screen.findByRole('option', {
         name: `${provider.label} Tasks Plugin ${provider.key}`,
       })
     ).toBeVisible()
@@ -351,7 +405,7 @@ test.each([
   async (state) => {
     const select = vi.fn()
     const user = userEvent.setup()
-    render(
+    renderPicker(
       <ChannelProviderPicker
         isCreating
         plugins={state.label === 'unavailable' ? [] : migratedPlugins}
@@ -363,6 +417,10 @@ test.each([
         onSelect={select}
       />
     )
+    // The first lookup waits for the directory query; the rest are synchronous.
+    await screen.findByRole('option', {
+      name: `${migratedProviders[0].label} Built-in #${migratedProviders[0].type}`,
+    })
     for (const provider of migratedProviders) {
       expect(
         screen.getByRole('option', {
@@ -375,8 +433,8 @@ test.each([
   }
 )
 
-test('creation retains complementary built-ins and does not replace a legacy type with an unrelated same-name plugin', () => {
-  render(
+test('creation retains complementary built-ins and does not replace a legacy type with an unrelated same-name plugin', async () => {
+  renderPicker(
     <ChannelProviderPicker
       isCreating
       plugins={[
@@ -406,7 +464,7 @@ test('creation retains complementary built-ins and does not replace a legacy typ
     'Kling Built-in #50',
     'Kling Plugin unrelated-kling',
   ]) {
-    expect(screen.getByRole('option', { name })).toBeVisible()
+    expect(await screen.findByRole('option', { name })).toBeVisible()
   }
 })
 
@@ -422,7 +480,7 @@ test('creation searches legacy names and translated names through the replacemen
   })
   const select = vi.fn()
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <I18nextProvider i18n={language}>
       <ChannelProviderPicker
         isCreating
@@ -441,7 +499,7 @@ test('creation searches legacy names and translated names through the replacemen
   const search = screen.getByRole('combobox')
   await user.type(search, 'Doubao')
   expect(
-    screen.getByRole('option', { name: 'Ark Video Plugin doubao' })
+    await screen.findByRole('option', { name: 'Ark Video Plugin doubao' })
   ).toBeVisible()
   await act(() => language.changeLanguage('zh'))
   await user.clear(search)
@@ -460,7 +518,7 @@ test.each(migratedProviders)(
   async (provider) => {
     const select = vi.fn()
     const user = userEvent.setup()
-    render(
+    renderPicker(
       <ChannelProviderPicker
         isCreating
         plugins={migratedPlugins}
@@ -499,7 +557,7 @@ test.each([true, false])(
   async (canBindPlugin) => {
     const user = userEvent.setup()
     const select = vi.fn()
-    render(
+    renderPicker(
       <ChannelProviderPicker
         isCreating
         plugins={plugins}
@@ -546,7 +604,7 @@ test.each([true, false])(
 
 test('custom providers have their own tab and keep the search when switching categories', async () => {
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <ChannelProviderPicker
       plugins={plugins}
       canBindPlugin
@@ -574,7 +632,7 @@ test('custom providers have their own tab and keep the search when switching cat
 
   await user.click(within(tabs).getByRole('tab', { name: 'Built-in' }))
   expect(
-    screen.getByRole('option', { name: 'OpenAI Built-in #1' })
+    await screen.findByRole('option', { name: 'OpenAI Built-in #1' })
   ).toBeVisible()
   expect(
     screen.queryByRole('option', { name: 'Advanced Custom Built-in #58' })
@@ -594,7 +652,7 @@ test('custom providers have their own tab and keep the search when switching cat
 
 test('category tabs use arrow and Enter navigation without moving focus into the search field', async () => {
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <ChannelProviderPicker
       plugins={plugins}
       canBindPlugin
@@ -643,7 +701,7 @@ test('removing plugin binding permission returns an active plugin tab to all pro
     onRetry: vi.fn(),
     onSelect: vi.fn(),
   }
-  const view = render(<ChannelProviderPicker {...props} canBindPlugin />)
+  const view = renderPicker(<ChannelProviderPicker {...props} canBindPlugin />)
   await user.click(screen.getByRole('tab', { name: 'Plugins' }))
   view.rerender(<ChannelProviderPicker {...props} canBindPlugin={false} />)
   expect(screen.queryByRole('tab', { name: 'Plugins' })).not.toBeInTheDocument()
@@ -656,7 +714,7 @@ test('removing plugin binding permission returns an active plugin tab to all pro
     screen.queryByRole('option', { name: /Plugin/ })
   ).not.toBeInTheDocument()
   expect(
-    screen.getByRole('option', { name: 'Advanced Custom Built-in #58' })
+    await screen.findByRole('option', { name: 'Advanced Custom Built-in #58' })
   ).toBeVisible()
 })
 
@@ -667,7 +725,7 @@ test('every built-in provider has a description and Anthropic includes compatibl
     fallbackLng: 'en',
     resources: { en: { translation: {} }, zhCN: zh },
   })
-  render(
+  renderPicker(
     <I18nextProvider i18n={language}>
       <ChannelProviderPicker
         plugins={[]}
@@ -684,7 +742,7 @@ test('every built-in provider has a description and Anthropic includes compatibl
   for (const option of screen.getAllByRole('option')) {
     expect(option).toHaveAccessibleDescription()
   }
-  const anthropic = screen.getByRole('option', {
+  const anthropic = await screen.findByRole('option', {
     name: 'Anthropic Built-in #14',
   })
   expect(anthropic).toHaveAccessibleDescription(
@@ -711,8 +769,10 @@ test('deprecated and flexible integration badges preserve provider selection and
     onRetry: vi.fn(),
     onSelect: select,
   }
-  const view = render(<ChannelProviderPicker {...props} />)
-  const custom = screen.getByRole('option', { name: 'Custom Built-in #8' })
+  const view = renderPicker(<ChannelProviderPicker {...props} />)
+  const custom = await screen.findByRole('option', {
+    name: 'Custom Built-in #8',
+  })
   const advanced = screen.getByRole('option', {
     name: 'Advanced Custom Built-in #58',
   })
@@ -750,7 +810,7 @@ test('plugin descriptions follow the current language with an English fallback a
   })
   const select = vi.fn()
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <I18nextProvider i18n={language}>
       <ChannelProviderPicker
         plugins={plugins}
@@ -764,7 +824,7 @@ test('plugin descriptions follow the current language with an English fallback a
     </I18nextProvider>
   )
 
-  const option = screen.getByRole('option', {
+  const option = await screen.findByRole('option', {
     name: 'OpenAI Plugin provider-video',
   })
   expect(
@@ -790,7 +850,7 @@ test('plugin descriptions follow the current language with an English fallback a
 test('built-in and plugin providers with the same name remain distinct and plugin search selects the binding', async () => {
   const select = vi.fn()
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <ChannelProviderPicker
       plugins={plugins}
       currentProvider={{ kind: 'builtin', type: 1 }}
@@ -804,7 +864,7 @@ test('built-in and plugin providers with the same name remain distinct and plugi
   )
   expect(screen.getAllByRole('option', { name: /^OpenAI / })).toHaveLength(2)
   expect(
-    screen.getByRole('option', { name: 'OpenAI Built-in #1' })
+    await screen.findByRole('option', { name: 'OpenAI Built-in #1' })
   ).toHaveAttribute('aria-current', 'true')
   expect(
     screen.getByRole('option', { name: 'OpenAI Plugin provider-video' })
@@ -820,7 +880,7 @@ test('built-in and plugin providers with the same name remain distinct and plugi
 test('searching a known type number selects that type and an unknown positive number remains usable', async () => {
   const select = vi.fn()
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <ChannelProviderPicker
       plugins={[]}
       canBindPlugin
@@ -850,7 +910,7 @@ test('searching a known type number selects that type and an unknown positive nu
 
 test('an empty plugin filter reports that no plugins can be bound', async () => {
   const user = userEvent.setup()
-  render(
+  renderPicker(
     <ChannelProviderPicker
       plugins={[]}
       canBindPlugin

@@ -186,6 +186,36 @@ export async function getChannelDefaultBaseURLs(): Promise<
 }
 
 /**
+ * One channel type the gateway can serve, as published by
+ * GET /api/channel/types. The gateway joins its adaptor registry, channel
+ * metadata registry, and task plugin registry, so the console never keeps a
+ * private copy that can drift from what the backend actually relays.
+ */
+export type ChannelTypeDirectoryEntry = {
+  type: number
+  name: string
+  baseURL: string
+  requiresBaseURL: boolean
+  deprecated: boolean
+  plugin: boolean
+  kind: string
+  protocol: string
+  configurable: boolean
+  taskPlugins?: { key: string; name: string }[]
+  pluginKey?: string
+}
+
+export async function getChannelTypeDirectory(): Promise<
+  ChannelTypeDirectoryEntry[]
+> {
+  const response = await api.get<{
+    success: boolean
+    data: ChannelTypeDirectoryEntry[]
+  }>('/api/channel/types')
+  return requireServerSuccess(response.data).data
+}
+
+/**
  * Create new channel(s)
  * Supports single, batch, and multi-key modes
  */

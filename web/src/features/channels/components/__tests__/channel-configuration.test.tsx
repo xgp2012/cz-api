@@ -168,6 +168,28 @@ beforeEach(() => {
     if (url === '/api/channel/models') {
       return { data: { success: true, data: [{ id: 'custom-model' }] } }
     }
+    if (url === '/api/channel/types') {
+      return {
+        data: {
+          success: true,
+          // Types the picker must offer: the built-ins the cases select from plus
+          // the task-plugin placeholder type that lists the bound plugins.
+          data: [1, 22, 24, 26, 36, 43, 45, 50, 51, 52, 54, 55, 58, 60, 61].map(
+            (type) => ({
+              type,
+              name: `type-${type}`,
+              baseURL: '',
+              requiresBaseURL: false,
+              deprecated: false,
+              plugin: false,
+              kind: 'chat',
+              protocol: 'openai',
+              configurable: true,
+            })
+          ),
+        },
+      }
+    }
     if (url === '/api/channel/default_base_urls') {
       return {
         data: {
@@ -228,7 +250,7 @@ function useWideScreen() {
 test('changing built-in providers updates server-provided URL placeholders without replacing the draft address', async () => {
   const user = userEvent.setup()
   render(<ConfigurationHarness />)
-  await user.click(screen.getByRole('option', { name: /^DeepSeek / }))
+  await user.click(await screen.findByRole('option', { name: /^DeepSeek / }))
   const address = screen.getByRole('textbox', { name: 'Base URL' })
   await waitFor(() =>
     expect(address).toHaveAttribute(
@@ -240,7 +262,7 @@ test('changing built-in providers updates server-provided URL placeholders witho
   await user.type(address, 'https://custom.example')
 
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
-  await user.click(screen.getByRole('option', { name: /^Gemini / }))
+  await user.click(await screen.findByRole('option', { name: /^Gemini / }))
   const geminiAddress = screen.getByRole('textbox', { name: 'Base URL' })
   expect(geminiAddress).toHaveAttribute(
     'placeholder',
@@ -251,7 +273,7 @@ test('changing built-in providers updates server-provided URL placeholders witho
   expect(geminiAddress).toHaveValue('')
 
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
-  await user.click(screen.getByRole('option', { name: /^New API / }))
+  await user.click(await screen.findByRole('option', { name: /^New API / }))
   expect(screen.getByRole('textbox', { name: 'Base URL' })).toHaveAttribute(
     'placeholder',
     'Leave empty to use default'
@@ -486,7 +508,7 @@ test('changing plugins preserves credentials and custom settings while applying 
   })
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
   await user.click(
-    screen.getByRole('option', { name: 'Video B Plugin video-b' })
+    await screen.findByRole('option', { name: 'Video B Plugin video-b' })
   )
   await user.click(screen.getByRole('tab', { name: /Connection & Models/ }))
   expect(screen.getByLabelText('API Key *')).toHaveValue('keep-secret')
@@ -496,7 +518,7 @@ test('changing plugins preserves credentials and custom settings while applying 
     target: { value: 'https://custom.example' },
   })
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
-  await user.click(screen.getByRole('option', { name: /Video A/ }))
+  await user.click(await screen.findByRole('option', { name: /Video A/ }))
   expect(screen.getByDisplayValue('https://custom.example')).toBeVisible()
   await user.click(screen.getByRole('tab', { name: /Routing & Mapping/ }))
   expect(screen.getByLabelText('Priority')).toHaveValue(7)
@@ -509,10 +531,9 @@ test('canceling provider selection or selecting the same provider preserves adju
   await user.click(screen.getByRole('button', { name: 'Clear All' }))
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
   expect(screen.getByRole('dialog')).toHaveAccessibleDescription(/Video A/)
-  expect(screen.getByRole('option', { name: /Video A/ })).toHaveAttribute(
-    'aria-current',
-    'true'
-  )
+  expect(
+    await screen.findByRole('option', { name: /Video A/ })
+  ).toHaveAttribute('aria-current', 'true')
   expect(
     within(
       screen.getByRole('button', { name: 'Back to configuration' })
@@ -526,7 +547,7 @@ test('canceling provider selection or selecting the same provider preserves adju
     screen.getByRole('button', { name: 'Configure Models' })
   ).toBeDisabled()
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
-  await user.click(screen.getByRole('option', { name: /Video A/ }))
+  await user.click(await screen.findByRole('option', { name: /Video A/ }))
   expect(
     screen.getByRole('button', { name: 'Configure Models' })
   ).toBeDisabled()
@@ -581,7 +602,7 @@ test('submitting a missing plugin address focuses its field without leaving crea
   ).toBeVisible()
   expect(post).not.toHaveBeenCalled()
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
-  await user.click(screen.getByRole('option', { name: /Video A/ }))
+  await user.click(await screen.findByRole('option', { name: /Video A/ }))
   await waitFor(() =>
     expect(
       screen.queryByText('Base URL is required for this channel type')
@@ -606,7 +627,7 @@ test('configuration navigation retains its height when the form content overflow
   expect(screen.getByRole('dialog')).toHaveClass('sm:max-w-7xl')
 })
 
-test('without plugin binding permission only built-in providers are offered', () => {
+test('without plugin binding permission only built-in providers are offered', async () => {
   useAuthStore.setState({
     auth: {
       ...originalAuth,
@@ -621,7 +642,7 @@ test('without plugin binding permission only built-in providers are offered', ()
     },
   })
   render(<ConfigurationHarness />)
-  expect(screen.getByRole('option', { name: /^OpenAI / })).toBeVisible()
+  expect(await screen.findByRole('option', { name: /^OpenAI / })).toBeVisible()
   expect(
     screen.queryByRole('button', { name: 'Plugins' })
   ).not.toBeInTheDocument()
@@ -640,7 +661,7 @@ test('plugin loading failure can be retried while built-in providers remain sele
   })
   render(<ConfigurationHarness />)
   expect(await screen.findByText('Failed to load plugins')).toBeVisible()
-  expect(screen.getByRole('option', { name: /^OpenAI / })).toBeVisible()
+  expect(await screen.findByRole('option', { name: /^OpenAI / })).toBeVisible()
   await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
   expect(await screen.findByRole('option', { name: /Video A/ })).toBeVisible()
 })
@@ -713,7 +734,7 @@ test.each(['create', 'edit'])(
     )
     if (mode === 'create') {
       await user.click(
-        screen.getByRole('option', { name: 'OpenAI Built-in #1' })
+        await screen.findByRole('option', { name: 'OpenAI Built-in #1' })
       )
       fireEvent.change(screen.getByLabelText('Name *'), {
         target: { value: 'Combined channel' },
@@ -768,10 +789,9 @@ test.each(['create', 'edit'])(
     expect(
       screen.getAllByRole('option', { name: 'custom-model' })
     ).toHaveLength(1)
-    expect(screen.getByRole('option', { name: 'sora-2' })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
+    expect(
+      await screen.findByRole('option', { name: 'sora-2' })
+    ).toHaveAttribute('aria-selected', 'true')
     await user.keyboard('{Escape}')
     const submitLabel = mode === 'create' ? 'Create Channel' : 'Update Channel'
     await user.click(screen.getByRole('button', { name: submitLabel }))
@@ -869,7 +889,7 @@ test('plugin model selection shares the field state, preserves other sources, an
     name: 'Select models or add custom ones',
   })
   await user.click(selector)
-  await user.click(screen.getByRole('option', { name: 'sora-2' }))
+  await user.click(await screen.findByRole('option', { name: 'sora-2' }))
   await user.keyboard('{Escape}')
   expect(sora).toHaveAccessibleName('Sora Selected 0 / 2')
   expect(screen.getByRole('button', { name: 'Configure Models' })).toBeEnabled()
@@ -943,7 +963,9 @@ test('loading a replacement plugin preserves an already selected legacy creation
     .mockResolvedValue({ data: { success: true } })
   const user = userEvent.setup()
   render(<ConfigurationHarness />)
-  await user.click(screen.getByRole('option', { name: 'Sora Built-in #55' }))
+  await user.click(
+    await screen.findByRole('option', { name: 'Sora Built-in #55' })
+  )
   fireEvent.change(screen.getByLabelText('Name *'), {
     target: { value: 'Legacy draft' },
   })
@@ -966,7 +988,9 @@ test('loading a replacement plugin preserves an already selected legacy creation
   expect(
     await screen.findByRole('option', { name: 'Sora Plugin sora' })
   ).toBeVisible()
-  const legacy = screen.getByRole('option', { name: 'Sora Built-in #55' })
+  const legacy = await screen.findByRole('option', {
+    name: 'Sora Built-in #55',
+  })
   expect(legacy).toHaveAttribute('aria-current', 'true')
   await user.click(legacy)
   expect(screen.getByLabelText('Name *')).toHaveValue('Legacy draft')
@@ -1026,7 +1050,7 @@ test.each([
   render(<ConfigurationHarness />)
   await user.click(await screen.findByRole('option', { name: /Video A/ }))
   await user.click(screen.getByRole('combobox', { name: 'Add Mode' }))
-  await user.click(screen.getByRole('option', { name: label }))
+  await user.click(await screen.findByRole('option', { name: label }))
   fireEvent.change(screen.getByLabelText('API Key *'), {
     target: { value: 'first-key\nsecond-key' },
   })
@@ -1085,7 +1109,7 @@ test('model discovery discards a response for old credentials and retains manual
     })
   const user = userEvent.setup()
   render(<ConfigurationHarness />)
-  await user.click(screen.getByRole('option', { name: /^OpenAI / }))
+  await user.click(await screen.findByRole('option', { name: /^OpenAI / }))
   fireEvent.change(screen.getByLabelText('API Key *'), {
     target: { value: 'first-key' },
   })
@@ -1122,7 +1146,7 @@ test('model discovery reports failures inline and allows an empty result to fall
     .mockResolvedValueOnce({ data: { success: true, data: [] } })
   const user = userEvent.setup()
   render(<ConfigurationHarness />)
-  await user.click(screen.getByRole('option', { name: /^OpenAI / }))
+  await user.click(await screen.findByRole('option', { name: /^OpenAI / }))
   fireEvent.change(screen.getByLabelText('API Key *'), {
     target: { value: 'test-key' },
   })
@@ -1331,7 +1355,9 @@ test.each(['stacked', 'inline'])(
 test('quick options show only applicable shortcuts when the provider changes', async () => {
   const user = userEvent.setup()
   render(<ConfigurationHarness />)
-  await user.click(screen.getByRole('option', { name: 'OpenAI Built-in #1' }))
+  await user.click(
+    await screen.findByRole('option', { name: 'OpenAI Built-in #1' })
+  )
   let quick = within(screen.getByRole('group', { name: 'Quick options' }))
   expect(quick.getAllByRole('switch')).toHaveLength(5)
   expect(
@@ -1349,7 +1375,7 @@ test('quick options show only applicable shortcuts when the provider changes', a
   ).toHaveAccessibleName(/Incomplete/)
 
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
-  await user.click(screen.getByRole('option', { name: /^DeepSeek / }))
+  await user.click(await screen.findByRole('option', { name: /^DeepSeek / }))
   quick = within(screen.getByRole('group', { name: 'Quick options' }))
   expect(quick.getAllByRole('switch')).toHaveLength(4)
   expect(
@@ -1358,7 +1384,7 @@ test('quick options show only applicable shortcuts when the provider changes', a
   expect(quick.getByRole('switch', { name: 'Pass Through Body' })).toBeChecked()
 
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
-  await user.click(screen.getByRole('option', { name: /Video A/ }))
+  await user.click(await screen.findByRole('option', { name: /Video A/ }))
   quick = within(screen.getByRole('group', { name: 'Quick options' }))
   expect(quick.getAllByRole('switch')).toHaveLength(1)
   expect(
@@ -1435,9 +1461,11 @@ test('editing legacy channels retains the full provider list and saves the origi
     await screen.findByRole('option', { name: 'Sora Plugin sora' })
   ).toBeVisible()
   expect(
-    screen.getByRole('option', { name: 'Doubao Built-in #54' })
+    await screen.findByRole('option', { name: 'Doubao Built-in #54' })
   ).toBeVisible()
-  const legacy = screen.getByRole('option', { name: 'Sora Built-in #55' })
+  const legacy = await screen.findByRole('option', {
+    name: 'Sora Built-in #55',
+  })
   expect(legacy).toHaveAttribute('aria-current', 'true')
   await user.click(legacy)
   expect(screen.getByText('custom-model')).toBeVisible()
@@ -1487,7 +1515,9 @@ test('opening and reselecting an existing plugin preserves its saved configurati
   )
   expect(screen.getByText('custom-model')).toBeVisible()
   await user.click(screen.getByRole('button', { name: 'Change provider' }))
-  await user.click(screen.getByRole('option', { name: /^Video B Plugin/ }))
+  await user.click(
+    await screen.findByRole('option', { name: /^Video B Plugin/ })
+  )
   expect(screen.getByDisplayValue('Existing channel')).toBeVisible()
   expect(screen.getByDisplayValue('https://saved.example')).toBeVisible()
   expect(screen.getByText('video-b-1')).toBeVisible()
@@ -2169,7 +2199,7 @@ test.each([
     })
     expect(strategy).toHaveTextContent(initialLabel)
     await user.click(strategy)
-    await user.click(screen.getByRole('option', { name: nextLabel }))
+    await user.click(await screen.findByRole('option', { name: nextLabel }))
     expect(strategy).toHaveTextContent(nextLabel)
     await user.click(screen.getByRole('button', { name: 'Update Channel' }))
     await waitFor(() => expect(put).toHaveBeenCalled())
@@ -2218,7 +2248,7 @@ test.each(['append', 'replace'])(
         screen.getByRole('combobox', { name: 'Key Update Mode' })
       )
       await user.click(
-        screen.getByRole('option', { name: 'Replace all existing keys' })
+        await screen.findByRole('option', { name: 'Replace all existing keys' })
       )
     }
     fireEvent.change(screen.getByLabelText('API Key *'), {
@@ -2932,7 +2962,7 @@ test('a New API channel binds upstream task plugins and publishes their models',
   expect(
     screen.queryByRole('option', { name: /^No Address/ })
   ).not.toBeInTheDocument()
-  await user.click(screen.getByRole('option', { name: /^Video B/ }))
+  await user.click(await screen.findByRole('option', { name: /^Video B/ }))
   await user.keyboard('{Escape}')
   expect(
     extensions.getByRole('button', { name: 'Video B Selected 1 / 1' })
@@ -2940,7 +2970,7 @@ test('a New API channel binds upstream task plugins and publishes their models',
   expect(screen.getByRole('button', { name: 'video-b-1' })).toBeVisible()
 
   await user.click(selector)
-  await user.click(screen.getByRole('option', { name: /^Video A/ }))
+  await user.click(await screen.findByRole('option', { name: /^Video A/ }))
   await user.keyboard('{Escape}')
   expect(
     extensions.queryByRole('button', { name: /^Video A/ })
@@ -2993,7 +3023,7 @@ test.each([
     const selector = await screen.findByRole('combobox', { name: 'AWS API' })
     await waitFor(() => expect(selector).toHaveTextContent(shown))
     await user.click(selector)
-    await user.click(screen.getByRole('option', { name: next }))
+    await user.click(await screen.findByRole('option', { name: next }))
     expect(selector).toHaveTextContent(next)
     await user.click(screen.getByRole('button', { name: 'Update Channel' }))
     await waitFor(() => expect(put).toHaveBeenCalled())

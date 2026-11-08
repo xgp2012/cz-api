@@ -51,6 +51,7 @@ export const channelsQueryKeys = {
   all: ['channels'] as const,
   defaultBaseURLs: () =>
     [...channelsQueryKeys.all, 'default_base_urls'] as const,
+  typeDirectory: () => [...channelsQueryKeys.all, 'type_directory'] as const,
   lists: () => [...channelsQueryKeys.all, 'list'] as const,
   list: (params: Record<string, unknown>) =>
     [...channelsQueryKeys.lists(), params] as const,

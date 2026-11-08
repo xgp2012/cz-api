@@ -18,9 +18,9 @@
 | M2b OAuth 收敛 | ⏸ 暂缓 | 需同批改前端 + 走 OWASP ASVS |
 | M2c authz 资源 | ✅ | 注册表加锁去重 |
 | M2d 模型来源 | ⏸ 暂缓 | 会扩大插件网络出口面 |
-| M3 Step 1 注册表化 | ❌ **没做** | `relay/channel/registry.go` 不存在 |
-| M3 Step 2 后端下发目录 | ❌ **没做** | 无 `/api/channel/registry` 路由，无调用方 |
-| M3 Step 3 前端驱动 | ❌ 没做 | 前端仍读硬编码 `constants.ts` |
+| M3 Step 1 注册表化 | ✅ | `relay/providerregistry` 是唯一注册点；`GetAdaptor` 与 `ChannelType2APIType` 同读一张表 |
+| M3 Step 2 后端下发目录 | ✅ | `GET /api/channel/types` → `model.ChannelTypeDirectory()` |
+| M3 Step 3 前端驱动 | ◑ 部分 | provider 选择器按目录过滤；`CHANNEL_TYPES` 文案表仍在前端（仅用于本地化标签） |
 | **M4 插件渠道** | ❌ **没开始** | 无 `openai_chat` 协议、无 provider 桥、无 SSE 逐帧 |
 | M5 声明式控制台 | ❌ 没开始 | |
 | M6 L3 进程外隔离 | ❌ 没开始 | |
@@ -34,14 +34,14 @@
 | # | 硬编码 | 位置（实测行号） | 后果 |
 |---|---|---|---|
 | 1 | 宿主协议表只有 3 项 | `pkg/jsplugin/routing.go:89-110`：`openai_responses` / `openai_video` / `openai_image` | JS 插件**不能**声明 chat / embedding / rerank 渠道 |
-| 2 | 分派是平行 switch 链，无注册点 | `relay/relay_adaptor.go:50` `func GetAdaptor(apiType int)`，共 **37 个 `case`**，226 行 | 新增渠道必须改 Go 并重新发版 |
-| 3 | 未知类型静默回退 OpenAI | `common/api_type.go`（102 行，`ChannelType2APIType`） | 隐性错误源 |
+| 2 | ~~分派是平行 switch 链~~ **已消除** | `relay/relay_adaptor.go` 现为 `providerregistry.LookupByAPIType`；37 个 case 变成 `relay/providerregistry/builtin.go` 的 39 行表 | 新增内置渠道仍是改 Go 一行，但不再是 37 分支回归面 |
+| 3 | ~~未知类型静默回退 OpenAI~~ **已标记** | `common/api_type.go` 仍返回 `APITypeOpenAI` 兜底，但 `ok=false`；注册表未命中不再伪装成已注册 | 调用方因此可区分「已知渠道」与「未知值」 |
 
 辅助证据（同样未变）：
 
 - `constant/channel.go`：`ChannelBaseURLs`（:67 起）、`ChannelTypeNames`（:141 起）都是硬编码表，下标即渠道类型。
 - `relay/common/relay_info.go` 的 `streamSupportedChannels` 硬编码约 24 项 —— **决定末帧是否带 usage，影响结算精度**，改渠道时必须同步。
-- 前端 `web/src/features/channels/constants.ts` 仍硬编码渠道下拉（41-102 行区域）。
+- 前端 `web/src/features/channels/constants.ts` 的 `CHANNEL_TYPES` 仍保留，但**只作为本地化标签来源**：能否选择已由 `/api/channel/types` 决定（`offerableTypes`）。文案表与目录的 `name` 尚未合并，属于 M3 Step 3 的剩余部分。
 
 ---
 
@@ -98,16 +98,13 @@ kind/hook 契约的单一来源是 `pkg/jsplugin/registry.go` 的 `TaskDriverHoo
 
 ## 3. 下一个任务：M4（建议按此顺序）
 
-### Step A — 后端下发渠道目录（最小、最低风险，先做这个）
+### Step A — ~~后端下发渠道目录~~ **已完成**
 
-目标：让前端下拉能显示「插件渠道」，且不改前端构建。
+已实现的是 `GET /api/channel/types`（`AdminAuth` + `authz.ChannelRead`，只读）：
 
-1. 新增 `GET /api/channel/registry`（`AdminAuth`，只读），返回 `constant.ChannelCatalog()` + 已注册插件渠道。
-2. 前端 `web/src/features/channels/constants.ts` 改为 **运行时拉取 + 静态兜底**（拉取失败回退现有硬编码，保证离线可用）。
-3. 补 7 语言 locale（见 `AGENTS.md` 的 i18n 规则：键是英文源串，必须 7 个 locale 同步）。
-4. 测试放 `web/src/features/channels/__tests__/`。
-
-**这一步不碰 Go 分派逻辑，风险最低，先跑通「后端驱动前端」的通路。**
+- 后端 `model.ChannelTypeDirectory()` 把 `constant.ChannelCatalog()`、内置适配器索引、任务插件注册表 join 成一张表；`Kind` / `Deprecated` / `Configurable` 让前端能区分「可新建」「仅保留历史行」「插件声明」。
+- 前端 `web/src/features/channels/lib/channel-type-directory.ts` 提供 `useChannelTypeDirectory()`；`channel-provider-picker.tsx` 用它过滤可选项，并据此决定是否提供「按类型号新建」入口。
+- 拉了但没做的两点：**未改用路由名 `channel/registry`**（用 `channel/types`，因为它返回的是类型目录而非注册表）、**`CHANNEL_TYPES` 文案表仍在**（仅作本地化标签，尚未与目录 `name` 合并）。
 
 ### Step B — `openai_chat` 宿主协议（真正的硬骨头）
 
@@ -116,12 +113,19 @@ kind/hook 契约的单一来源是 `pkg/jsplugin/registry.go` 的 `TaskDriverHoo
 3. **SSE 逐帧回调是唯一难点**：参考 `relay/channel/task/jsplugin/adaptor.go` 的桥接方式，但任务插件是「提交+轮询」，文本渠道是「一请求一流」，语义不同，**不能照抄**。
 4. 插件侧仍受 `utils.fetch` 仅 GET/HEAD 的限制 —— **上游转发必须由宿主做**（这正是网关设计），插件只提供「怎么构造请求」的描述。
 
-### Step C — `GetAdaptor` 注册表化
+### Step C — ~~`GetAdaptor` 注册表化~~ **已完成**（实际做法与计划不同，见下）
 
-1. 引入 `relay/channel/registry.go`，`Registration{ChannelType, APIType, Name, DefaultBaseURL, SupportsStream, NewAdaptor, PluginKey}`。
-2. 内置适配器在各自包 `init()` 里 `Register(...)`。**这个模式在本仓库已被验证两次**：`oauth/github.go:19-20`、`service/authz/resources_channel.go:21`。
-3. `GetAdaptor` 改查表；`ChannelType2APIType` 修掉「未知静默回退 OpenAI」，改为显式错误。
-4. ⚠️ **绝不重排 `iota`**：`constant/api_type.go` 与 `constant/channel.go` 的值可能已持久化（`channels.type`、任务 `platform`）。只能追加或显式赋值。
+计划里写的是「在 `relay/channel/registry.go`，各适配器包 `init()` 里 `Register(...)`」。**这个做法在 Go 里编译不过**，原因和实际落点：
+
+1. 适配器包（`relay/channel/openai` 等）几乎都 import `common`，而 `common` 又要查「渠道类型 → API 类型」。注册表放进 `relay/channel` 会让 `common → relay/channel → openai → common` 成环。实测报错 `import cycle not allowed`（两次，分别经 `advancedcustom` 与 `claude` 触发）。
+2. 实际落点：`relay/providerregistry`（`registry.go` 结构 + `builtin.go` 39 行表 + `lookup.go` 索引 + `init.go` 安装）。
+   - `relay` 与 `common` 都**依赖它**读表，它自己**只依赖** `relay/channel`，import 图无环。
+   - `common.ChannelType2APIType` 通过 `SetChannelAPITypeResolver` 注入的查找函数读同一张表，不需要 `common` import 任何适配器。
+3. `GetAdaptor(apiType int)` 签名未变，内部改为 `LookupByAPIType`；新增 `GetAdaptorByChannelType(channelType int)`。
+4. `constant/channel_adaptors.go` 是因为 `model` 不能 import `relay/providerregistry`（适配器包依赖 `model`）而保留的一级索引；`relay/providerregistry/registry_test.go` 有测试强制两边一致，**不允许只改一边**。
+5. ⚠️ **绝不重排 `iota`**：`constant/api_type.go` 与 `constant/channel.go` 的值可能已持久化（`channels.type`、任务 `platform`）。只能追加或显式赋值。
+
+**给下一位的提醒**：任何「把注册表移到更内层包」的尝试都会重新撞上同一个 import 环。这不是风格问题，是 Go 的类型系统决定的。
 
 ### 工作量参考（来自原方案，仅供参考）
 
