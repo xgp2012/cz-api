@@ -31,6 +31,11 @@ type ChannelMetadata struct {
 	// Deprecated reports whether the type is kept only for stored rows and should
 	// not be offered for new channels.
 	Deprecated bool `json:"deprecated"`
+	// Kind is how the channel is served: channelTypeKindChat for the relay
+	// adaptors registered in relay/providerregistry, an empty string for a slot
+	// with no adaptor, and the plugin's own kind for a plugin channel type. It
+	// is what lets a client tell "offer this" from "keep this for old rows".
+	Kind string `json:"kind"`
 }
 
 // channelRegistry is the single authoritative description of built-in channel

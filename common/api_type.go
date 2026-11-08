@@ -2,94 +2,49 @@ package common
 
 import "github.com/QuantumNous/new-api/constant"
 
+// ChannelType2APIType resolves the API type of a channel type.
+//
+// It reads the provider registry installed at startup by
+// relay/providerregistry, the same table relay.GetAdaptor reads, through the
+// function variable below. The indirection is required by the import graph: the
+// provider packages implement the adaptor interface and import common, while
+// this package cannot import them. relay/providerregistry sets the variable from
+// its init, and it is part of every binary that can relay, so a request never
+// observes it unset.
+//
+// An unregistered channel type still falls back to the OpenAI API type so
+// existing stored rows keep relaying, but reports ok=false so callers can tell a
+// known channel from an unknown one. The task plugin channel type is the one
+// exception: it is served by the task relay and must never resolve to an
+// adaptor, which is why it keeps the -1 sentinel.
 func ChannelType2APIType(channelType int) (int, bool) {
-	apiType := -1
-	switch channelType {
-	case constant.ChannelTypeOpenAI:
-		apiType = constant.APITypeOpenAI
-	case constant.ChannelTypeAnthropic:
-		apiType = constant.APITypeAnthropic
-	case constant.ChannelTypeBaidu:
-		apiType = constant.APITypeBaidu
-	case constant.ChannelTypePaLM:
-		apiType = constant.APITypePaLM
-	case constant.ChannelTypeZhipu:
-		apiType = constant.APITypeZhipu
-	case constant.ChannelTypeAli:
-		apiType = constant.APITypeAli
-	case constant.ChannelTypeXunfei:
-		apiType = constant.APITypeXunfei
-	case constant.ChannelTypeTencent:
-		apiType = constant.APITypeTencent
-	case constant.ChannelTypeGemini:
-		apiType = constant.APITypeGemini
-	case constant.ChannelTypeZhipu_v4:
-		apiType = constant.APITypeZhipuV4
-	case constant.ChannelTypeOllama:
-		apiType = constant.APITypeOllama
-	case constant.ChannelTypePerplexity:
-		apiType = constant.APITypePerplexity
-	case constant.ChannelTypeAws:
-		apiType = constant.APITypeAws
-	case constant.ChannelTypeCohere:
-		apiType = constant.APITypeCohere
-	case constant.ChannelTypeDify:
-		apiType = constant.APITypeDify
-	case constant.ChannelTypeJina:
-		apiType = constant.APITypeJina
-	case constant.ChannelCloudflare:
-		apiType = constant.APITypeCloudflare
-	case constant.ChannelTypeSiliconFlow:
-		apiType = constant.APITypeSiliconFlow
-	case constant.ChannelTypeVertexAi:
-		apiType = constant.APITypeVertexAi
-	case constant.ChannelTypeMistral:
-		apiType = constant.APITypeMistral
-	case constant.ChannelTypeDeepSeek:
-		apiType = constant.APITypeDeepSeek
-	case constant.ChannelTypeMokaAI:
-		apiType = constant.APITypeMokaAI
-	case constant.ChannelTypeVolcEngine:
-		apiType = constant.APITypeVolcEngine
-	case constant.ChannelTypeBaiduV2:
-		apiType = constant.APITypeBaiduV2
-	case constant.ChannelTypeOpenRouter:
-		apiType = constant.APITypeOpenRouter
-	case constant.ChannelTypeXinference:
-		apiType = constant.APITypeXinference
-	case constant.ChannelTypeXai:
-		apiType = constant.APITypeXai
-	case constant.ChannelTypeCoze:
-		apiType = constant.APITypeCoze
-	case constant.ChannelTypeJimeng:
-		apiType = constant.APITypeJimeng
-	case constant.ChannelTypeMoonshot:
-		apiType = constant.APITypeMoonshot
-	case constant.ChannelTypeSubmodel:
-		apiType = constant.APITypeSubmodel
-	case constant.ChannelTypeMiniMax:
-		apiType = constant.APITypeMiniMax
-	case constant.ChannelTypeReplicate:
-		apiType = constant.APITypeReplicate
-	case constant.ChannelTypeCodex:
-		apiType = constant.APITypeCodex
-	case constant.ChannelTypeAdvancedCustom, constant.ChannelTypeVLLM, constant.ChannelTypeSGLang:
-		apiType = constant.APITypeAdvancedCustom
-	case constant.ChannelTypeSub2API:
-		apiType = constant.APITypeSub2API
-	case constant.ChannelTypeNewAPI:
-		apiType = constant.APITypeNewAPI
+	apiType, ok := constant.APITypeOpenAI, false
+	if resolveChannelAPIType != nil {
+		apiType, ok = resolveChannelAPIType(channelType)
 	}
-	if apiType == -1 {
-		// Task plugin channels are served by the task relay and must never
-		// fall back to the OpenAI adaptor.
-		if channelType == constant.ChannelTypeTaskPlugin {
-			return -1, false
-		}
-		return constant.APITypeOpenAI, false
+	if ok {
+		return apiType, true
 	}
-	return apiType, true
+	if channelType == constant.ChannelTypeTaskPlugin {
+		return -1, false
+	}
+	return constant.APITypeOpenAI, false
 }
+
+// SetChannelAPITypeResolver installs the provider registry lookup. It must be
+// called once at startup and panics on a second call:
+// a silent replacement could point a channel at the wrong provider.
+func SetChannelAPITypeResolver(resolver func(channelType int) (int, bool)) {
+	if resolver == nil {
+		panic("common: nil channel API type resolver")
+	}
+	if resolveChannelAPIType != nil {
+		panic("common: channel API type resolver already installed")
+	}
+	resolveChannelAPIType = resolver
+}
+
+var resolveChannelAPIType func(channelType int) (int, bool)
 
 func SupportsResponsesCompact(channelType, apiType int) bool {
 	switch apiType {
