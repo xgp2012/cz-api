@@ -24,6 +24,20 @@ func TestChannelDefaultBaseURLsRequireReadPermission(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 }
 
+// TestChannelTypeDirectoryRequiresReadPermission guards the endpoint the console
+// reads its whole channel type list from: it exposes only static provider
+// metadata, so read access is enough, but anonymous callers must still be refused.
+func TestChannelTypeDirectoryRequiresReadPermission(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/types", authz.ChannelRead, controller.GetChannelTypeDirectory)
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	registerChannelRoutes(engine.Group("/api"))
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/channel/types", nil))
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
+
 func TestChannelStatusRoutesUseExpectedPermissions(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodGet, "/priority/order", authz.ChannelRead, controller.GetChannelPriorityOrder)
 	assertChannelRoutePermission(t, http.MethodPost, "/priority/reorder", authz.ChannelWrite, controller.ReorderChannelPriority)
